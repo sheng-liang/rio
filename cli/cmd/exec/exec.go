@@ -2,9 +2,7 @@ package exec
 
 import (
 	"fmt"
-	"os"
 
-	"github.com/docker/docker/pkg/reexec"
 	"github.com/rancher/rio/cli/cmd/ps"
 	"github.com/rancher/rio/cli/pkg/clicontext"
 	"github.com/sirupsen/logrus"
@@ -38,11 +36,10 @@ func (e *Exec) Run(ctx *clicontext.CLIContext) error {
 
 	podNS, podName, containerName := cd.Pod.Namespace, cd.Pod.Name, cd.Container.Name
 
-	execArgs := []string{"kubectl"}
+	execArgs := []string{}
 	if logrus.GetLevel() >= logrus.DebugLevel {
 		execArgs = append(execArgs, "-v=9")
 	}
-	execArgs = append(execArgs, "-n", podNS, "exec")
 	if e.I_Stdin {
 		execArgs = append(execArgs, "-i")
 	}
@@ -53,11 +50,9 @@ func (e *Exec) Run(ctx *clicontext.CLIContext) error {
 	execArgs = append(execArgs, podName, "-c", containerName)
 	execArgs = append(execArgs, args[1:]...)
 
-	logrus.Debugf("%v, KUBECONFIG=%s", execArgs, os.Getenv("KUBECONFIG"))
-	cmd := reexec.Command(execArgs...)
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-
-	return cmd.Run()
+	cluster, err := ctx.Cluster()
+	if err != nil {
+		return err
+	}
+	return cluster.Kubectl(podNS, "exec", execArgs...)
 }

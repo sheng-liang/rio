@@ -130,7 +130,7 @@ func filter(args []string) []func(*ContainerData) bool {
 		}
 
 		svc := lookup.ParseServiceName(arg)
-		prefix := svc.String() + "/"
+		prefix := svc.String()
 		result = append(result, func(cd *ContainerData) bool {
 			name, err := containerName(cd.Pod, cd.Container)
 			if err != nil {
