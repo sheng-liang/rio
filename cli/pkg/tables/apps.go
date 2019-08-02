@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/rancher/rio/cli/pkg/table"
+	"github.com/rancher/rio/modules/service/controllers/serviceset"
 	riov1 "github.com/rancher/rio/pkg/apis/rio.cattle.io/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -136,7 +137,7 @@ func formatAppDetail(obj interface{}) (string, error) {
 	appData := obj.(*AppData)
 	buffer := strings.Builder{}
 
-	versions := revisionsByVersion(appData.App)
+	versions := appData.Revisions
 	for _, name := range revisions(appData.App) {
 		svc, ok := appData.Revisions[name]
 		if !ok {
@@ -144,7 +145,7 @@ func formatAppDetail(obj interface{}) (string, error) {
 		}
 
 		rev := versions[name]
-		if !rev.DeploymentReady && (svc.Revision.SystemSpec == nil || !svc.Revision.SystemSpec.Global) {
+		if !serviceset.IsReady(rev.Revision.Status.DeploymentStatus) && (svc.Revision.SystemSpec == nil || !svc.Revision.SystemSpec.Global) {
 			if buffer.Len() > 0 {
 				buffer.WriteString("; ")
 			}
