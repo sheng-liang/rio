@@ -7,6 +7,7 @@ import (
 
 	webhookv1 "github.com/rancher/gitwatcher/pkg/apis/gitwatcher.cattle.io/v1"
 	riov1 "github.com/rancher/rio/pkg/apis/rio.cattle.io/v1"
+	"github.com/rancher/rio/pkg/constants"
 	"github.com/rancher/rio/pkg/constructors"
 	projectv1controller "github.com/rancher/rio/pkg/generated/controllers/admin.rio.cattle.io/v1"
 	v1 "github.com/rancher/rio/pkg/generated/controllers/rio.cattle.io/v1"
@@ -112,7 +113,12 @@ func (p *populator) populate(obj runtime.Object, ns *corev1.Namespace, os *objec
 		return err
 	}
 
-	populateWebhookAndSecrets(webhook, service, os)
+	clusterDomain, err := p.clusterDomainCache.Get(p.systemNamespace, constants.ClusterDomainName)
+	if err != nil {
+		return err
+	}
+
+	populateWebhookAndSecrets(webhook, service, clusterDomain.Status.ClusterDomain, os)
 	return nil
 }
 
@@ -285,7 +291,7 @@ func (p populator) populateBuild(service *riov1.Service, systemNamespace string,
 	return nil
 }
 
-func populateWebhookAndSecrets(webhookService *riov1.App, service *riov1.Service, os *objectset.ObjectSet) {
+func populateWebhookAndSecrets(webhookService *riov1.App, service *riov1.Service, domain string, os *objectset.ObjectSet) {
 	if service.Spec.Build.Revision != "" {
 		return
 	}
@@ -298,6 +304,8 @@ func populateWebhookAndSecrets(webhookService *riov1.App, service *riov1.Service
 			PR:                             service.Spec.Build.EnablePR,
 			Branch:                         service.Spec.Build.Branch,
 			RepositoryCredentialSecretName: service.Spec.Build.GitSecretName,
+			GithubWebhookToken:             service.Spec.Build.GithubSecretName,
+			GithubDeployment:               !service.Spec.Build.DisableGithubDeployment,
 		},
 	})
 

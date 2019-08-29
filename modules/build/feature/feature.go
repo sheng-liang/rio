@@ -6,6 +6,7 @@ import (
 
 	"github.com/rancher/rio/modules/build/controllers/build"
 	"github.com/rancher/rio/modules/build/controllers/gitcommit"
+	"github.com/rancher/rio/modules/build/controllers/githubdeployment"
 	"github.com/rancher/rio/modules/build/controllers/pod"
 	"github.com/rancher/rio/modules/build/controllers/proxy"
 	"github.com/rancher/rio/modules/build/controllers/service"
@@ -49,6 +50,7 @@ func Register(ctx context.Context, rContext *types.Context) error {
 			proxy.Register,
 			stack1.Register,
 			pod.Register,
+			githubdeployment.Register,
 		},
 		FixedAnswers: map[string]string{
 			"NAMESPACE":      rContext.Namespace,

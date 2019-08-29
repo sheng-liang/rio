@@ -30,7 +30,7 @@ type Service struct {
 	Status     ServiceStatus      `json:"status,omitempty"`
 }
 
-// ServiceRevision speficies the APP name, Version and Weight to uniquely identify each Revision
+// ServiceRevision specifies the APP name, Version and Weight to uniquely identify each Revision
 type ServiceRevision struct {
 	// Revision Version
 	Version string `json:"version,omitempty"`
@@ -331,6 +331,16 @@ type ServiceStatus struct {
 
 	// The list of publicdomains pointing to the service
 	PublicDomains []string `json:"publicDomains,omitempty"`
+
+	// gitwatcher name
+	GitWatcherName string `json:"gitWatcherName,omitempty"`
+
+	// Generic Gihub Status
+	GithubStatus *GithubStatus `json:"githubStatus,omitempty"`
+}
+
+type GithubStatus struct {
+	PR string `json:"pr,omitempty"`
 }
 
 type ScaleStatus struct {
@@ -399,4 +409,7 @@ type ImageBuild struct {
 
 	// Push image
 	Push bool `json:"push,omitempty"`
+
+	// Disable Github Deployment status update
+	DisableGithubDeployment bool `json:"disableGithubDeployment,omitempty"`
 }

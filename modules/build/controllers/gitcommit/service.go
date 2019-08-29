@@ -26,15 +26,13 @@ func (h Handler) onChangeService(key string, obj *webhookv1.GitCommit, gitWatche
 
 	service, err := h.services.Cache().Get(obj.Namespace, obj.Spec.GitWatcherName)
 	if err != nil {
-		if errors.IsNotFound(err) {
-			return obj, nil
-		}
 		return obj, err
 	}
 
 	if obj.Spec.Commit == gitWatcher.Status.FirstCommit {
 		if service.Status.FirstRevision == "" && service.Status.FirstRevision != gitWatcher.Status.FirstCommit {
 			service = service.DeepCopy()
+			service.Status.GitWatcherName = gitWatcher.Name
 			service.Status.FirstRevision = gitWatcher.Status.FirstCommit
 			_, err := h.services.Update(service)
 			return obj, err
@@ -52,6 +50,10 @@ func (h Handler) onChangeService(key string, obj *webhookv1.GitCommit, gitWatche
 			return obj, nil
 		}
 
+		newServiceName := serviceName(service, obj)
+		newService := riov1.NewService(service.Namespace, newServiceName, riov1.Service{})
+		newService.Status.GitWatcherName = gitWatcher.Name
+
 		appName, _ := services.AppAndVersion(service)
 		specCopy := service.Spec.DeepCopy()
 		specCopy.Build.Repo = obj.Spec.RepositoryURL
@@ -62,6 +64,10 @@ func (h Handler) onChangeService(key string, obj *webhookv1.GitCommit, gitWatche
 		if obj.Spec.PR != "" {
 			specCopy.Version = "pr-" + obj.Spec.PR
 			specCopy.Build.StageOnly = true
+			if newService.Status.GithubStatus == nil {
+				newService.Status.GithubStatus = &riov1.GithubStatus{}
+			}
+			newService.Status.GithubStatus.PR = obj.Spec.PR
 		} else {
 			specCopy.Version = "v" + obj.Spec.Commit[0:5]
 		}
@@ -79,13 +85,10 @@ func (h Handler) onChangeService(key string, obj *webhookv1.GitCommit, gitWatche
 		} else {
 			specCopy.Weight = 0
 		}
-		newServiceName := serviceName(service, obj)
-		newService := riov1.NewService(service.Namespace, newServiceName, riov1.Service{
-			Spec: *specCopy,
-		})
+		newService.Spec = *specCopy
 
-		if obj.Spec.PR != "" && obj.Spec.Merged {
-			logrus.Infof("PR %s is merged, deleting revision, name: %s, namespace: %s, revision: %s", obj.Spec.PR, newService.Name, newService.Namespace, obj.Spec.Commit)
+		if obj.Spec.PR != "" && (obj.Spec.Merged || obj.Spec.Closed) {
+			logrus.Infof("PR %s is merged/closed, deleting revision, name: %s, namespace: %s, revision: %s", obj.Spec.PR, newService.Name, newService.Namespace, obj.Spec.Commit)
 			if err := h.services.Delete(newService.Namespace, newService.Name, &v1.DeleteOptions{}); err != nil && !errors.IsNotFound(err) {
 				return obj, err
 			}

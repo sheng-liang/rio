@@ -9,6 +9,7 @@ replace (
 	github.com/jetstack/cert-manager => github.com/rancher/cert-manager v0.7.0-rio.1
 	github.com/knative/pkg => github.com/rancher/pkg v0.0.0-20190514055449-b30ab9de040e
 	github.com/matryer/moq => github.com/rancher/moq v0.0.0-20190404221404-ee5226d43009
+	github.com/rancher/gitwatcher => ../gitwatcher
 	golang.org/x/tools => golang.org/x/tools v0.0.0-20190411180116-681f9ce8ac52
 )
 
@@ -44,6 +45,7 @@ require (
 	github.com/go-bindata/go-bindata v3.1.2+incompatible
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/google/btree v1.0.0 // indirect
+	github.com/google/go-github/v28 v28.0.0
 	github.com/gophercloud/gophercloud v0.2.0 // indirect
 	github.com/gregjones/httpcache v0.0.0-20190611155906-901d90724c79 // indirect
 	github.com/hashicorp/errwrap v0.0.0-20141028054710-7554cd9344ce // indirect
@@ -59,6 +61,7 @@ require (
 	github.com/mitchellh/go-wordwrap v1.0.0 // indirect
 	github.com/moby/buildkit v0.6.0
 	github.com/natefinch/lumberjack v0.0.0-20170911140457-aee462912944 // indirect
+	github.com/nbio/st v0.0.0-20140626010706-e9e8d9816f32 // indirect
 	github.com/onsi/ginkgo v1.8.0
 	github.com/onsi/gomega v1.5.0 // indirect
 	github.com/opencontainers/runc v1.0.1-0.20190307181833-2b18fe1d885e // indirect
@@ -70,7 +73,7 @@ require (
 	github.com/rancher/gitwatcher v0.3.0
 	github.com/rancher/mapper v0.0.0-20190814232720-058a8b7feb99
 	github.com/rancher/rdns-server v0.4.2
-	github.com/rancher/wrangler v0.1.6-0.20190816172853-95ab7af39785
+	github.com/rancher/wrangler v0.1.7-0.20190824203417-e7b6ecb74e90
 	github.com/rancher/wrangler-api v0.2.0
 	github.com/rivo/tview v0.0.0-20190319111340-8d5eba0c2f51
 	github.com/rivo/uniseg v0.0.0-20190313204849-f699dde9c340 // indirect
@@ -84,6 +87,7 @@ require (
 	go.uber.org/zap v1.9.0 // indirect
 	golang.org/x/crypto v0.0.0-20190313024323-a1f597ede03a
 	golang.org/x/net v0.0.0-20190318221613-d196dffd7c2b // indirect
+	golang.org/x/oauth2 v0.0.0-20190402181905-9f3314589c9a
 	golang.org/x/sync v0.0.0-20190423024810-112230192c58
 	golang.org/x/tools v0.0.0-20190411180116-681f9ce8ac52 // indirect
 	google.golang.org/appengine v1.5.0 // indirect
