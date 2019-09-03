@@ -4,10 +4,25 @@
 
 - [Install Options](#install-options)
 - [Running workloads](#running-workload)
+  - [Quick start](#quick-start)
+  - [Canary Deployment](#canary-deployment)
+  - [Automatic DNS and HTTPS](#automatic-dns-and-https)
+  - [Adding external services](#adding-external-services)
+  - [Adding Router](#adding-router)
+  - [Adding Public domain](#adding-public-domain)
+  - [Using Riofile](#using-riofile)
 - [Monitoring](#Monitoring)
 - [AutoScaling based on QPS](#autoscaling)
 - [Continuous Delivery](#continuous-deliverysource-code-to-deployment)
+  - [Example](#example)
+  - [Setting Private repository](#setup-credential-for-private-repository)
+  - [Setting github webhook](#setup-github-webhook-experimental)
+  - [Setting private registry](#set-custom-build-arguments-and-docker-registry)
+  - [Setting Pull Request Feature](#enable-pull-request-experimental)
+  - [View Build logs](#view-build-logs)
 - [Using Riofile to build and develop](#using-riofile-to-build-and-develop-application)
+- [Concept](#concept)
+- [FAQ](#faq)
 
 ### Install Options
 Rio provides three install options for users. 
@@ -27,15 +42,6 @@ There are other install options:
 * `lite`: install with lite mode.
 
 ### Running workload
-
-- [Quick start](#quick-start)
-- [Canary Deployment](#canary-deployment)
-- [Automatic DNS and HTTPS](#automatic-dns-and-https)
-- [Adding external services](#adding-external-services)
-- [Adding Router](#adding-router)
-- [Adding Public domain](#adding-public-domain)
-- [Using Riofile](#using-riofile)
-
 
 ##### Quick start
 To deploy workload to rio:
@@ -363,6 +369,8 @@ default/autoscale-zero:v0   strongmonkey1992/autoscale:v0   9 seconds ago   1   
 ```
 
 ### Continuous Delivery(Source code to Deployment)
+
+##### Example 
 Rio supports configuration of a Git-based source code repository to deploy the actual workload. It can be as easy
 as giving Rio a valid Git repository repo URL.
 
@@ -425,7 +433,7 @@ $ curl https://build-default.8axlxl.on-rio.io
 Hi there, I am StrongMonkey:v3
 ```
 
-#### Setup credential for private repository and github webhook
+#### Setup credential for private repository
 1. Set up git basic auth.(Currently ssh key is not supported and will be added soon). Here is an exmaple of adding a github repo.
 ```bash
 $ rio secret add --git-basic-auth
@@ -560,12 +568,15 @@ External Service provides a way to register external IPs or hostnames in the ser
 
 Public Domain can be configured to assign a service or router a vanity domain like www.myproductionsite.com.
 
-### Service Mesh
+### Configs
 
-Rio has a built in service mesh, powered by Istio and Envoy. The service mesh provides all of the core communication
-abilities for services to talk to each other, inbound traffic and outbound traffic. All traffic can be encrypted,
-validated, and routed dynamically according to the configuration. Rio specifically does not require the user to
-understand much about the underlying service mesh.
+ConfigMaps(Kubernetes resource) can be referenced by Rio services. It is a piece of configuration which can be mounted into pods so that it can be separated from image artifacts.
+It can be created separated in the existing cluster and referenced by Rio service.
+
+### Secrets
+
+Secrets(Kubernetes resource) can be referenced by rio services. It contains sensitive data which can be mounted into pods to consume. Secrets can also be created separated in the existing
+cluster and referenced by rio services. 
 
 ## FAQ
 
@@ -584,5 +595,10 @@ Change spec.secretRef.name to the name of your TLS secret.
 ```
 Disable rdns and letsencrypt features by running `rio install --disable-features rdns,letsencrypt`. Edit cluster domain by running `k edit clusterdomain cluster-domain -n rio-system`.
 Change status.domain to your own wildcard doamin. You are responsible to manage your dns record to gateway IP or worker nodes.
+```
+
+* How can I reference persist volume?
+```
+Rio only supports stateless workloads at this point.
 ```
 
