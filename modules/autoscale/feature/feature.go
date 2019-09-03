@@ -3,6 +3,8 @@ package feature
 import (
 	"context"
 
+	"github.com/rancher/wrangler/pkg/start"
+
 	"github.com/rancher/rio/pkg/constants"
 
 	"github.com/rancher/rio/modules/autoscale/controller/service"
@@ -28,6 +30,11 @@ func Register(ctx context.Context, rContext *types.Context) error {
 		},
 		Controllers: []features.ControllerRegister{
 			service.Register,
+		},
+		OnStart: func(feature *v1.Feature) error {
+			return start.All(ctx, 5,
+				rContext.Serving,
+			)
 		},
 	}
 	return feature.Register()

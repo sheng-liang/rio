@@ -2,12 +2,8 @@ package routeset
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/rancher/rio/modules/istio/controllers/routeset/populate"
-	"github.com/rancher/rio/modules/istio/pkg/domains"
-	"github.com/rancher/rio/modules/istio/pkg/parse"
-	adminv1 "github.com/rancher/rio/pkg/apis/admin.rio.cattle.io/v1"
 	riov1 "github.com/rancher/rio/pkg/apis/rio.cattle.io/v1"
 	"github.com/rancher/rio/pkg/constants"
 	projectv1controller "github.com/rancher/rio/pkg/generated/controllers/admin.rio.cattle.io/v1"
@@ -15,7 +11,6 @@ import (
 	"github.com/rancher/rio/pkg/stackobject"
 	"github.com/rancher/rio/types"
 	corev1controller "github.com/rancher/wrangler-api/pkg/generated/controllers/core/v1"
-	"github.com/rancher/wrangler/pkg/generic"
 	"github.com/rancher/wrangler/pkg/objectset"
 	"github.com/rancher/wrangler/pkg/relatedresource"
 	corev1 "k8s.io/api/core/v1"
@@ -23,17 +18,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-const (
-	routerDomainUpdate = "router-domain-updater"
-)
-
 func Register(ctx context.Context, rContext *types.Context) error {
 	c := stackobject.NewGeneratingController(ctx, rContext, "routing-routeset", rContext.Rio.Rio().V1().Router())
 	c.Apply = c.Apply.WithStrictCaching().
 		WithCacheTypes(rContext.Networking.Networking().V1alpha3().VirtualService(),
 			rContext.Networking.Networking().V1alpha3().DestinationRule(),
-			rContext.Networking.Networking().V1alpha3().ServiceEntry(),
-			rContext.K8sNetworking.Networking().V1beta1().Ingress())
+			rContext.Networking.Networking().V1alpha3().ServiceEntry())
 
 	r := &routeSetHandler{
 		systemNamespace:      rContext.Namespace,
@@ -42,8 +32,6 @@ func Register(ctx context.Context, rContext *types.Context) error {
 		routesetCache:        rContext.Rio.Rio().V1().Router().Cache(),
 		clusterDomainCache:   rContext.Global.Admin().V1().ClusterDomain().Cache(),
 	}
-
-	rContext.Rio.Rio().V1().Router().AddGenericHandler(ctx, routerDomainUpdate, generic.UpdateOnChange(rContext.Rio.Rio().V1().Router().Updater(), r.syncDomain))
 
 	relatedresource.Watch(ctx, "externalservice-routeset", r.resolve,
 		rContext.Rio.Rio().V1().Router(), rContext.Rio.Rio().V1().ExternalService())
@@ -110,38 +98,5 @@ func (r *routeSetHandler) populate(obj runtime.Object, ns *corev1.Namespace, os 
 		return err
 	}
 
-	if constants.InstallMode == constants.InstallModeIngress {
-		populate.Ingress(r.systemNamespace, domain, clusterDomain.Spec.SecretRef.Name, routeSet, os)
-	}
-
 	return nil
-}
-
-func (r *routeSetHandler) syncDomain(key string, obj runtime.Object) (runtime.Object, error) {
-	if obj == nil {
-		return nil, nil
-	}
-
-	clusterDomain, err := r.clusterDomainCache.Get(r.systemNamespace, constants.ClusterDomainName)
-	if err != nil {
-		return obj, err
-	}
-
-	updateDomain(obj.(*riov1.Router), clusterDomain)
-
-	return obj, nil
-}
-
-func updateDomain(router *riov1.Router, clusterDomain *adminv1.ClusterDomain) {
-	protocol := "http"
-	if clusterDomain.Status.HTTPSSupported {
-		protocol = "https"
-	}
-	router.Status.Endpoints = []string{
-		fmt.Sprintf("%s://%s", protocol, domains.GetExternalDomain(router.Name, router.Namespace, clusterDomain.Status.ClusterDomain)),
-	}
-	for _, pd := range router.Status.PublicDomains {
-		router.Status.Endpoints = append(router.Status.Endpoints, fmt.Sprintf("%s://%s", protocol, pd))
-	}
-	router.Status.Endpoints = parse.FormatEndpoint(protocol, router.Status.Endpoints)
 }

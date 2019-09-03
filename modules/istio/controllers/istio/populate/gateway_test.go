@@ -20,7 +20,7 @@ func TestGatewayWithoutPublicdomains(t *testing.T) {
 	expected := constructors.NewGateway(systemNs, constants.RioGateway, v1alpha3.Gateway{
 		Spec: v1alpha3.GatewaySpec{
 			Selector: map[string]string{
-				"app": constants.IstioGateway,
+				"app": constants.GatewayName,
 			},
 			Servers: []v1alpha3.Server{
 				{
@@ -81,7 +81,7 @@ func TestGatewayWithPublicdomains(t *testing.T) {
 	expected := constructors.NewGateway(systemNs, constants.RioGateway, v1alpha3.Gateway{
 		Spec: v1alpha3.GatewaySpec{
 			Selector: map[string]string{
-				"app": constants.IstioGateway,
+				"app": constants.GatewayName,
 			},
 			Servers: []v1alpha3.Server{
 				{

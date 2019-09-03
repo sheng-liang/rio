@@ -28,13 +28,13 @@ func serviceSelector(service *riov1.Service, systemNamespace string, os *objects
 			{
 				Name:       "http",
 				Protocol:   v1.ProtocolTCP,
-				TargetPort: intstr.FromInt(httpPort),
+				TargetPort: intstr.FromInt(80),
 				Port:       int32(httpPort),
 			},
 			{
 				Name:       "https",
 				Protocol:   v1.ProtocolTCP,
-				TargetPort: intstr.FromInt(httpsPort),
+				TargetPort: intstr.FromInt(443),
 				Port:       int32(httpsPort),
 			},
 		}
@@ -47,7 +47,7 @@ func serviceSelector(service *riov1.Service, systemNamespace string, os *objects
 }
 
 func isGateway(service *riov1.Service, systemNamespace string) bool {
-	return service.Name == constants.IstioGateway && service.Namespace == systemNamespace
+	return service.Name == constants.GatewayName && service.Namespace == systemNamespace
 }
 
 func newServiceSelector(name, namespace string, serviceType v1.ServiceType, labels, selectorLabels map[string]string) *v1.Service {

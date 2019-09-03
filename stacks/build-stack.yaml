@@ -37,6 +37,7 @@ configs:
 
 services:
   registry:
+    disableServiceMesh: true
     image: registry:2
     env:
     - REGISTRY_HTTP_ADDR=0.0.0.0:80
@@ -59,8 +60,9 @@ services:
     - :8090
     imagePullPolicy: always
     ports:
-    - 8090/tcp,http-webhookinator
+    - 8090/http,http-webhook
   build-controller:
+    disableServiceMesh: true
     global_permissions:
     - '* pods'
     - '* namespaces'

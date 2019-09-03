@@ -332,7 +332,7 @@ func (i *Install) fallbackInstall(ctx *clicontext.CLIContext, info *adminv1.RioI
 	}
 
 	if i.Mode == constants.InstallModeSvclb {
-		svc, err := ctx.Core.Services(info.Status.SystemNamespace).Get(fmt.Sprintf("%s-%s", constants.IstioGateway, constants.DefaultServiceVersion), metav1.GetOptions{})
+		svc, err := ctx.Core.Services(info.Status.SystemNamespace).Get(fmt.Sprintf("%s-%s", constants.GatewayName, constants.DefaultServiceVersion), metav1.GetOptions{})
 		if err != nil {
 			return false, err
 		}

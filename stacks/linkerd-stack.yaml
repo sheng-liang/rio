@@ -1,0 +1,1443 @@
+configs:
+  linkerd-config:
+    global: |
+      {"linkerdNamespace":"${NAMESPACE}","cniEnabled":false,"version":"stable-2.5.0","identityContext":{"trustDomain":"cluster.local","trustAnchorsPem":"-----BEGIN CERTIFICATE-----\nMIIBiTCCAS+gAwIBAgIBATAKBggqhkjOPQQDAjAsMSowKAYDVQQDEyFpZGVudGl0\neS5yaW8tc3lzdGVtLmNsdXN0ZXIubG9jYWwwHhcNMTkwODI5MjMyNjE4WhcNMjAw\nODI4MjMyNjM4WjAsMSowKAYDVQQDEyFpZGVudGl0eS5yaW8tc3lzdGVtLmNsdXN0\nZXIubG9jYWwwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREvZZQk2NkSRQSfxY3\nV6K49+R0DkhvO6zKLzt9FTLRVYCgGf2oe8Q5lpuRYcTp+riXDrFRq3Sy/Eqqlt6c\nRdL4o0IwQDAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsG\nAQUFBwMCMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgWVG19W9Y\n98nyxcw8hPtn5+OKLv5GxunoZR/L7Hh2eZECIQD0FzqYwtP8FzYb3DI2NLxtP45R\nr98nsQuK1GxPhZoyLg==\n-----END CERTIFICATE-----\n","issuanceLifetime":"86400s","clockSkewAllowance":"20s"},"autoInjectContext":null,"omitWebhookSideEffects":false,"clusterDomain":"cluster.local"}
+    proxy: |
+      {"proxyImage":{"imageName":"gcr.io/linkerd-io/proxy","pullPolicy":"IfNotPresent"},"proxyInitImage":{"imageName":"gcr.io/linkerd-io/proxy-init","pullPolicy":"IfNotPresent"},"controlPort":{"port":4190},"ignoreInboundPorts":[],"ignoreOutboundPorts":[],"inboundPort":{"port":4143},"adminPort":{"port":4191},"outboundPort":{"port":4140},"resource":{"requestCpu":"","requestMemory":"","limitCpu":"","limitMemory":""},"proxyUid":"2102","logLevel":{"level":"warn,linkerd2_proxy=info"},"disableExternalProfiles":true,"proxyVersion":"stable-2.5.0","proxyInitImageVersion":"v1.1.0"}
+    install: |
+      {"uuid":"16f8eb98-1999-4b16-b92b-714a9891aa8b","cliVersion":"stable-2.5.0","flags":[]}
+  linkerd-prometheus-config:
+    prometheus.yml: |-
+      global:
+        scrape_interval: 10s
+        scrape_timeout: 10s
+        evaluation_interval: 10s
+
+      rule_files:
+      - /etc/prometheus/*_rules.yml
+
+      scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+        - targets: ['localhost:9090']
+
+      - job_name: 'grafana'
+        kubernetes_sd_configs:
+        - role: pod
+          namespaces:
+            names: ['${NAMESPACE}']
+        relabel_configs:
+        - source_labels:
+          - __meta_kubernetes_pod_container_name
+          action: keep
+          regex: ^grafana$
+
+      #  Required for: https://grafana.com/grafana/dashboards/315
+      - job_name: 'kubernetes-nodes-cadvisor'
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+
+        kubernetes_sd_configs:
+        - role: node
+        relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+        - target_label: __address__
+          replacement: kubernetes.default.svc:443
+        - source_labels: [__meta_kubernetes_node_name]
+          regex: (.+)
+          target_label: __metrics_path__
+          replacement: /api/v1/nodes/$1/proxy/metrics/cadvisor
+
+      - job_name: 'linkerd-controller'
+        kubernetes_sd_configs:
+        - role: pod
+          namespaces:
+            names: ['${NAMESPACE}']
+        relabel_configs:
+        - source_labels:
+          - __meta_kubernetes_pod_label_linkerd_io_control_plane_component
+          - __meta_kubernetes_pod_container_port_name
+          action: keep
+          regex: (.*);admin-http$
+        - source_labels: [__meta_kubernetes_pod_container_name]
+          action: replace
+          target_label: component
+
+      - job_name: 'linkerd-proxy'
+        kubernetes_sd_configs:
+        - role: pod
+        relabel_configs:
+        - source_labels:
+          - __meta_kubernetes_pod_container_name
+          - __meta_kubernetes_pod_container_port_name
+          - __meta_kubernetes_pod_label_linkerd_io_control_plane_ns
+          action: keep
+          regex: ^linkerd-proxy;linkerd-admin;${NAMESPACE}$
+        - source_labels: [__meta_kubernetes_namespace]
+          action: replace
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          action: replace
+          target_label: pod
+        # special case k8s' "job" label, to not interfere with prometheus' "job"
+        # label
+        # __meta_kubernetes_pod_label_linkerd_io_proxy_job=foo =>
+        # k8s_job=foo
+        - source_labels: [__meta_kubernetes_pod_label_linkerd_io_proxy_job]
+          action: replace
+          target_label: k8s_job
+        # drop __meta_kubernetes_pod_label_linkerd_io_proxy_job
+        - action: labeldrop
+          regex: __meta_kubernetes_pod_label_linkerd_io_proxy_job
+        # __meta_kubernetes_pod_label_linkerd_io_proxy_deployment=foo =>
+        # deployment=foo
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_linkerd_io_proxy_(.+)
+        # drop all labels that we just made copies of in the previous labelmap
+        - action: labeldrop
+          regex: __meta_kubernetes_pod_label_linkerd_io_proxy_(.+)
+        # __meta_kubernetes_pod_label_linkerd_io_foo=bar =>
+        # foo=bar
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_linkerd_io_(.+)
+  linkerd-grafana-config:
+    grafana.ini: |-
+      instance_name = linkerd-grafana
+
+      [server]
+      root_url = %(protocol)s://%(domain)s:/grafana/
+
+      [auth]
+      disable_login_form = true
+
+      [auth.anonymous]
+      enabled = true
+      org_role = Editor
+
+      [auth.basic]
+      enabled = false
+
+      [analytics]
+      check_for_updates = false
+
+      [panels]
+      disable_sanitize_html = true
+
+    datasources.yaml: |-
+      apiVersion: 1
+      datasources:
+      - name: prometheus
+        type: prometheus
+        access: proxy
+        orgId: 1
+        url: http://linkerd-prometheus.${NAMESPACE}.svc.cluster.local:9090
+        isDefault: true
+        jsonData:
+          timeInterval: "5s"
+        version: 1
+        editable: true
+
+    dashboards.yaml: |-
+      apiVersion: 1
+      providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: true
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+          homeDashboardId: linkerd-top-line
+  linkerd-traefik:
+    config: |-
+      # traefik.toml
+      logLevel = "INFO"
+      defaultEntryPoints = ["http","https"]
+      [entryPoints]
+        [entryPoints.http]
+        address = ":80"
+        compress = true
+        [entryPoints.https]
+        address = ":443"
+        compress = true
+          [entryPoints.https.tls]
+            [[entryPoints.https.tls.certificates]]
+            CertFile = "/ssl/tls.crt"
+            KeyFile = "/ssl/tls.key"
+      [kubernetes]
+        ingressClass = "linkerd-gateway"
+      [traefikLog]
+        format = "json"
+      [ping]
+        entryPoint = "https"
+
+
+services:
+  linkerd-gateway:
+    annotations:
+      linkerd.io/inject: enabled
+    global_permissions:
+    - get,list,watch services
+    - get,list,watch endpoints
+    - get,list,watch secrets
+    - get,list,watch networking.k8s.io/ingresses
+    - get,list,watch extensions/ingresses
+    image: traefik:1.7.14
+    args:
+    - --configfile=/config/traefik.toml
+    configs:
+    - linkerd-traefik/config:/config/traefik.toml
+    global: true
+    ports:
+    {{- if eq "${INSTALL_MODE}" "hostport" }}
+    - ${HTTP_PORT}:80/http,http,internal=true,hostport=true
+    - ${HTTPS_PORT}:443/http,https,internal=true,hostport=true
+    {{- else}}
+    - ${HTTP_PORT}/http,http,internal=true
+    - ${HTTPS_PORT}/http,https,internal=true
+    {{- end}}
+    - 8080/http,admin,internal=true
+  linkerd-identity:
+    disableServiceMesh: true
+    global_permissions:
+    - 'create authentication.k8s.io/tokenreviews'
+    labels:
+      linkerd.io/control-plane-component: identity
+      linkerd.io/control-plane-ns: ${NAMESPACE}
+      linkerd.io/proxy-deployment: linkerd-identity
+    annotations:
+      linkerd.io/created-by: linkerd/cli stable-2.5.0
+      linkerd.io/identity-mode: default
+      linkerd.io/proxy-version: stable-2.5.0
+    args:
+    - identity
+    - -log-level=info
+    image: gcr.io/linkerd-io/controller:stable-2.5.0
+    livenessProbe:
+      httpGet:
+        path: /ping
+        port: 9990
+      initialDelaySeconds: 10
+    readinessProbe:
+      failureThreshold: 7
+      httpGet:
+        path: /ready
+        port: 9990
+    ports:
+    - 8080/grpc,grpc,internal=true
+    - 9990/http,admin-http,internal=true
+    user: 2103
+    configs:
+    - linkerd-config:/var/run/linkerd/config
+    secrets:
+    - linkerd-identity-issuer:/var/run/linkerd/identity/issuer
+    containers:
+    - env:
+      - name: LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS
+        value: |
+          -----BEGIN CERTIFICATE-----
+          MIIBiTCCAS+gAwIBAgIBATAKBggqhkjOPQQDAjAsMSowKAYDVQQDEyFpZGVudGl0
+          eS5yaW8tc3lzdGVtLmNsdXN0ZXIubG9jYWwwHhcNMTkwODI5MjMyNjE4WhcNMjAw
+          ODI4MjMyNjM4WjAsMSowKAYDVQQDEyFpZGVudGl0eS5yaW8tc3lzdGVtLmNsdXN0
+          ZXIubG9jYWwwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREvZZQk2NkSRQSfxY3
+          V6K49+R0DkhvO6zKLzt9FTLRVYCgGf2oe8Q5lpuRYcTp+riXDrFRq3Sy/Eqqlt6c
+          RdL4o0IwQDAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsG
+          AQUFBwMCMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgWVG19W9Y
+          98nyxcw8hPtn5+OKLv5GxunoZR/L7Hh2eZECIQD0FzqYwtP8FzYb3DI2NLxtP45R
+          r98nsQuK1GxPhZoyLg==
+          -----END CERTIFICATE-----
+      - LINKERD2_PROXY_LOG=warn,linkerd2_proxy=info
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-controller.${NAMESPACE}.svc.cluster.local:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_INBOUND_ACCEPT_KEEPALIVE=10000ms
+      - LINKERD2_PROXY_OUTBOUND_CONNECT_KEEPALIVE=10000ms
+      - _pod_ns=$(self/namespace)
+      - LINKERD2_PROXY_DESTINATION_CONTEXT=ns:$(_pod_ns)
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=localhost.:8080
+      - _pod_sa=$(self/serviceAccount)
+      - _l5d_ns=${NAMESPACE}
+      - _l5d_trustdomain=cluster.local
+      - LINKERD2_PROXY_IDENTITY_LOCAL_NAME=$(_pod_sa).$(_pod_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_IDENTITY_SVC_NAME=linkerd-identity.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_DESTINATION_SVC_NAME=linkerd-controller.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_TAP_SVC_NAME=linkerd-tap.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      name: linkerd-proxy
+      image: gcr.io/linkerd-io/proxy:stable-2.5.0
+      livenessProbe:
+        httpGet:
+          path: /metrics
+          port: 4191
+        initialDelaySeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 4191
+      ports:
+      - 4143/http,linkerd-proxy,internal=true
+      - 4191/http,linkerd-admin,internal=true
+      user: 2102
+      readOnly: true
+      volumes:
+      - linkerd-identity-end-entity:/var/run/linkerd/identity/end-entity
+    - args:
+      - --incoming-proxy-port
+      - "4143"
+      - --outgoing-proxy-port
+      - "4140"
+      - --proxy-uid
+      - "2102"
+      - --inbound-ports-to-ignore
+      - 4190,4191
+      - --outbound-ports-to-ignore
+      - "443"
+      image: gcr.io/linkerd-io/proxy-init:v1.1.0
+      name: linkerd-init
+      cpus: "10m"
+      memory: "10Mi"
+      init: true
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add:
+          - NET_ADMIN
+          - NET_RAW
+        privileged: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: false
+        runAsUser: 0
+  linkerd-controller:
+    disableServiceMesh: true
+    global_permissions:
+    - 'list,get,watch extensions/daemonsets'
+    - 'list,get,watch apps/daemonsets'
+    - 'list,get,watch extensions/deployments'
+    - 'list,get,watch apps/deployments'
+    - 'list,get,watch extensions/replicasets'
+    - 'list,get,watch apps/replicasets'
+    - 'list,get,watch extensions/statefulsets'
+    - 'list,get,watch apps/statefulsets'
+    - 'list,get,watch extensions/jobs'
+    - 'list,get,watch batch/jobs'
+    - 'list,get,watch pods'
+    - 'list,get,watch endpoints'
+    - 'list,get,watch services'
+    - 'list,get,watch replicationcontrollers'
+    - 'list,get,watch namespaces'
+    - 'list,get,watch linkerd.io/serviceprofiles'
+    - 'list,get,watch split.smi-spec.io/trafficsplits'
+    annotations:
+      linkerd.io/created-by: linkerd/cli stable-2.5.0
+      linkerd.io/identity-mode: default
+      linkerd.io/proxy-version: stable-2.5.0
+    labels:
+      linkerd.io/control-plane-component: controller
+      linkerd.io/control-plane-ns: ${NAMESPACE}
+      linkerd.io/proxy-deployment: linkerd-controller
+    containers:
+    - args:
+      - public-api
+      - -prometheus-url=http://linkerd-prometheus.${NAMESPACE}.svc.cluster.local:9090
+      - -controller-namespace=${NAMESPACE}
+      - -log-level=info
+      image: gcr.io/linkerd-io/controller:stable-2.5.0
+      livenessProbe:
+        httpGet:
+          path: /ping
+          port: 9995
+        initialDelaySeconds: 10
+      readinessProbe:
+        failureThreshold: 7
+        httpGet:
+          path: /ready
+          port: 9995
+      ports:
+      - 8085/http,http,internal=true
+      - 9995/http,admin-http,internal=true
+      user: 2103
+      name: public-api
+      configs:
+      - linkerd-config:/var/run/linkerd/config
+    - args:
+      - destination
+      - -addr=:8086
+      - -controller-namespace=rio-system
+      - -enable-h2-upgrade=true
+      - -log-level=info
+      image: gcr.io/linkerd-io/controller:stable-2.5.0
+      livenessProbe:
+        httpGet:
+          path: /ping
+          port: 9996
+        initialDelaySeconds: 10
+      name: linkerd-destination
+      ports:
+      - 8086/grpc,grpc,internal=true
+      readinessProbe:
+        failureThreshold: 7
+        httpGet:
+          path: /ready
+          port: 9996
+      user: 2103
+      configs:
+      - linkerd-config:/var/run/linkerd/config
+    - env:
+      - name: LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS
+        value: |
+          -----BEGIN CERTIFICATE-----
+          MIIBiTCCAS+gAwIBAgIBATAKBggqhkjOPQQDAjAsMSowKAYDVQQDEyFpZGVudGl0
+          eS5yaW8tc3lzdGVtLmNsdXN0ZXIubG9jYWwwHhcNMTkwODI5MjMyNjE4WhcNMjAw
+          ODI4MjMyNjM4WjAsMSowKAYDVQQDEyFpZGVudGl0eS5yaW8tc3lzdGVtLmNsdXN0
+          ZXIubG9jYWwwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREvZZQk2NkSRQSfxY3
+          V6K49+R0DkhvO6zKLzt9FTLRVYCgGf2oe8Q5lpuRYcTp+riXDrFRq3Sy/Eqqlt6c
+          RdL4o0IwQDAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsG
+          AQUFBwMCMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgWVG19W9Y
+          98nyxcw8hPtn5+OKLv5GxunoZR/L7Hh2eZECIQD0FzqYwtP8FzYb3DI2NLxtP45R
+          r98nsQuK1GxPhZoyLg==
+          -----END CERTIFICATE-----
+      - LINKERD2_PROXY_LOG=warn,linkerd2_proxy=info
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=localhost.:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_INBOUND_ACCEPT_KEEPALIVE=10000ms
+      - _pod_ns=$(self/namespace)
+      - LINKERD2_PROXY_DESTINATION_CONTEXT=ns:$(_pod_ns)
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.${NAMESPACE}.svc.cluster.local:8080
+      - _pod_sa=$(self/serviceAccount)
+      - _l5d_ns=${NAMESPACE}
+      - _l5d_trustdomain=cluster.local
+      - LINKERD2_PROXY_IDENTITY_LOCAL_NAME=$(_pod_sa).$(_pod_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_IDENTITY_SVC_NAME=linkerd-identity.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_DESTINATION_SVC_NAME=linkerd-controller.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_TAP_SVC_NAME=linkerd-tap.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      image: gcr.io/linkerd-io/proxy:stable-2.5.0
+      name: linkerd-proxy
+      livenessProbe:
+        httpGet:
+          path: /metrics
+          port: 4191
+        initialDelaySeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 4191
+        initialDelaySeconds: 2
+      ports:
+      - 4143/http,linkerd-proxy,internal=true
+      - 4191/http,linkerd-admin,internal=true
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsUser: 2102
+      volumes:
+      - linkerd-identity-end-entity:/var/run/linkerd/identity/end-entity
+    - args:
+      - --incoming-proxy-port
+      - "4143"
+      - --outgoing-proxy-port
+      - "4140"
+      - --proxy-uid
+      - "2102"
+      - --inbound-ports-to-ignore
+      - 4190,4191
+      - --outbound-ports-to-ignore
+      - "443"
+      image: gcr.io/linkerd-io/proxy-init:v1.1.0
+      name: linkerd-init
+      cpus: "10m"
+      memory: "10Mi"
+      init: true
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add:
+            - NET_ADMIN
+            - NET_RAW
+        privileged: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: false
+        runAsUser: 0
+  linkerd-web:
+    disableServiceMesh: true
+    global_permissions:
+    - 'list,get,watch pods'
+    - 'list,get,watch services'
+    - 'list,get,watch replicationcontrollers'
+    - 'list,get,watch namespaces'
+    - 'list,get,watch extensions/daemonsets'
+    - 'list,get,watch apps/daemonsets'
+    - 'list,get,watch extensions/deployments'
+    - 'list,get,watch apps/deployments'
+    - 'list,get,watch extensions/replicasets'
+    - 'list,get,watch apps/replicasets'
+    - 'list,get,watch extensions/statefulsets'
+    - 'list,get,watch apps/statefulsets'
+    - 'list,get,watch extensions/jobs'
+    - 'list,get,watch batch/jobs'
+    - 'watch tap.linkerd.io/*'
+    annotations:
+      linkerd.io/created-by: linkerd/cli stable-2.5.0
+      linkerd.io/identity-mode: default
+      linkerd.io/proxy-version: stable-2.5.0
+    labels:
+      linkerd.io/control-plane-component: web
+      linkerd.io/control-plane-ns: ${NAMESPACE}
+      linkerd.io/proxy-deployment: linkerd-web
+    args:
+    - -api-addr=linkerd-controller.${NAMESPACE}.svc.cluster.local:8085
+    - -grafana-addr=linkerd-grafana.${NAMESPACE}.svc.cluster.local:3000
+    - -controller-namespace=${NAMESPACE}
+    - -log-level=info
+    image: gcr.io/linkerd-io/web:stable-2.5.0
+    livenessProbe:
+      httpGet:
+          path: /ping
+          port: 9994
+      initialDelaySeconds: 10
+    readinessProbe:
+      failureThreshold: 7
+      httpGet:
+        path: /ready
+        port: 9994
+    ports:
+    - 8084/http,http
+    - 9994/http,admin-http,internal=true
+    user: 2103
+    configs:
+    - linkerd-config:/var/run/linkerd/config
+    containers:
+    - env:
+      - name: LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS
+        value: |
+          -----BEGIN CERTIFICATE-----
+          MIIBiTCCAS+gAwIBAgIBATAKBggqhkjOPQQDAjAsMSowKAYDVQQDEyFpZGVudGl0
+          eS5yaW8tc3lzdGVtLmNsdXN0ZXIubG9jYWwwHhcNMTkwODI5MjMyNjE4WhcNMjAw
+          ODI4MjMyNjM4WjAsMSowKAYDVQQDEyFpZGVudGl0eS5yaW8tc3lzdGVtLmNsdXN0
+          ZXIubG9jYWwwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREvZZQk2NkSRQSfxY3
+          V6K49+R0DkhvO6zKLzt9FTLRVYCgGf2oe8Q5lpuRYcTp+riXDrFRq3Sy/Eqqlt6c
+          RdL4o0IwQDAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsG
+          AQUFBwMCMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgWVG19W9Y
+          98nyxcw8hPtn5+OKLv5GxunoZR/L7Hh2eZECIQD0FzqYwtP8FzYb3DI2NLxtP45R
+          r98nsQuK1GxPhZoyLg==
+          -----END CERTIFICATE-----
+      - LINKERD2_PROXY_LOG=warn,linkerd2_proxy=info
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-controller.${NAMESPACE}.svc.cluster.local:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_INBOUND_ACCEPT_KEEPALIVE=10000ms
+      - _pod_ns=$(self/namespace)
+      - LINKERD2_PROXY_DESTINATION_CONTEXT=ns:$(_pod_ns)
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.${NAMESPACE}.svc.cluster.local:8080
+      - _pod_sa=$(self/serviceAccount)
+      - _l5d_ns=${NAMESPACE}
+      - _l5d_trustdomain=cluster.local
+      - LINKERD2_PROXY_IDENTITY_LOCAL_NAME=$(_pod_sa).$(_pod_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_IDENTITY_SVC_NAME=linkerd-identity.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_DESTINATION_SVC_NAME=linkerd-controller.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_TAP_SVC_NAME=linkerd-tap.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      image: gcr.io/linkerd-io/proxy:stable-2.5.0
+      name: linkerd-proxy
+      livenessProbe:
+        httpGet:
+          path: /metrics
+          port: 4191
+        initialDelaySeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 4191
+        initialDelaySeconds: 2
+      ports:
+      - 4143/http,linkerd-proxy,internal=true
+      - 4191/http,linkerd-admin,internal=true
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsUser: 2102
+      volumes:
+      - linkerd-identity-end-entity:/var/run/linkerd/identity/end-entity
+    - args:
+      - --incoming-proxy-port
+      - "4143"
+      - --outgoing-proxy-port
+      - "4140"
+      - --proxy-uid
+      - "2102"
+      - --inbound-ports-to-ignore
+      - 4190,4191
+      - --outbound-ports-to-ignore
+      - "443"
+      image: gcr.io/linkerd-io/proxy-init:v1.1.0
+      name: linkerd-init
+      cpus: "100m"
+      memory: "50Mi"
+      init: true
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add:
+          - NET_ADMIN
+          - NET_RAW
+        privileged: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: false
+        runAsUser: 0
+  linkerd-prometheus:
+    disableServiceMesh: true
+    global_permissions:
+    - 'get,list,watch nodes'
+    - 'get,list,watch /nodes/proxy'
+    - 'get,list,watch pods'
+    annotations:
+      linkerd.io/created-by: linkerd/cli stable-2.5.0
+      linkerd.io/identity-mode: default
+      linkerd.io/proxy-version: stable-2.5.0
+    labels:
+      linkerd.io/control-plane-component: prometheus
+      linkerd.io/control-plane-ns: ${NAMESPACE}
+      linkerd.io/proxy-deployment: linkerd-prometheus
+    containers:
+    - args:
+      - --storage.tsdb.path=/data
+      - --storage.tsdb.retention.time=6h
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --log.level=info
+      image: prom/prometheus:v2.11.1
+      name: prometheus
+      ports:
+      - 9090/http,admin-http,internal=true
+      livenessProbe:
+        httpGet:
+          path: /-/healthy
+          port: 9090
+        initialDelaySeconds: 30
+        timeoutSeconds: 30
+      readinessProbe:
+        httpGet:
+          path: /-/ready
+          port: 9090
+        initialDelaySeconds: 30
+        timeoutSeconds: 30
+      runAsUser: 65534
+      configs:
+      - linkerd-prometheus-config/prometheus.yml:/etc/prometheus/prometheus.yml
+      volumes:
+      - data:/data
+    - env:
+      - name: LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS
+        value: |
+          -----BEGIN CERTIFICATE-----
+          MIIBiTCCAS+gAwIBAgIBATAKBggqhkjOPQQDAjAsMSowKAYDVQQDEyFpZGVudGl0
+          eS5yaW8tc3lzdGVtLmNsdXN0ZXIubG9jYWwwHhcNMTkwODI5MjMyNjE4WhcNMjAw
+          ODI4MjMyNjM4WjAsMSowKAYDVQQDEyFpZGVudGl0eS5yaW8tc3lzdGVtLmNsdXN0
+          ZXIubG9jYWwwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREvZZQk2NkSRQSfxY3
+          V6K49+R0DkhvO6zKLzt9FTLRVYCgGf2oe8Q5lpuRYcTp+riXDrFRq3Sy/Eqqlt6c
+          RdL4o0IwQDAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsG
+          AQUFBwMCMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgWVG19W9Y
+          98nyxcw8hPtn5+OKLv5GxunoZR/L7Hh2eZECIQD0FzqYwtP8FzYb3DI2NLxtP45R
+          r98nsQuK1GxPhZoyLg==
+          -----END CERTIFICATE-----
+      - LINKERD2_PROXY_LOG=warn,linkerd2_proxy=info
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-controller.${NAMESPACE}.svc.cluster.local:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_INBOUND_ACCEPT_KEEPALIVE=10000ms
+      - _pod_ns=$(self/namespace)
+      - LINKERD2_PROXY_DESTINATION_CONTEXT=ns:$(_pod_ns)
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.${NAMESPACE}.svc.cluster.local:8080
+      - _pod_sa=$(self/serviceAccount)
+      - _l5d_ns=${NAMESPACE}
+      - _l5d_trustdomain=cluster.local
+      - LINKERD2_PROXY_IDENTITY_LOCAL_NAME=$(_pod_sa).$(_pod_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_IDENTITY_SVC_NAME=linkerd-identity.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_DESTINATION_SVC_NAME=linkerd-controller.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_TAP_SVC_NAME=linkerd-tap.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      image: gcr.io/linkerd-io/proxy:stable-2.5.0
+      name: linkerd-proxy
+      livenessProbe:
+        httpGet:
+          path: /metrics
+          port: 4191
+        initialDelaySeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 4191
+        initialDelaySeconds: 2
+      ports:
+      - 4143/http,linkerd-proxy,internal=true
+      - 4191/http,linkerd-admin,internal=true
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsUser: 2102
+      volumes:
+      - linkerd-identity-end-entity:/var/run/linkerd/identity/end-entity
+    - args:
+      - --incoming-proxy-port
+      - "4143"
+      - --outgoing-proxy-port
+      - "4140"
+      - --proxy-uid
+      - "2102"
+      - --inbound-ports-to-ignore
+      - 4190,4191
+      - --outbound-ports-to-ignore
+      - "443"
+      image: gcr.io/linkerd-io/proxy-init:v1.1.0
+      name: linkerd-init
+      cpus: "10m"
+      memory: "10Mi"
+      init: true
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add:
+          - NET_ADMIN
+          - NET_RAW
+        privileged: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: false
+        runAsUser: 0
+  linkerd-grafana:
+    disableServiceMesh: true
+    annotations:
+      linkerd.io/created-by: linkerd/cli stable-2.5.0
+      linkerd.io/identity-mode: default
+      linkerd.io/proxy-version: stable-2.5.0
+    labels:
+      linkerd.io/control-plane-component: grafana
+      linkerd.io/control-plane-ns: ${NAMESPACE}
+      linkerd.io/proxy-deployment: linkerd-grafana
+    env:
+    - GF_PATHS_DATA=/data
+    image: gcr.io/linkerd-io/grafana:stable-2.5.0
+    name: grafana
+    livenessProbe:
+      httpGet:
+        path: /api/health
+        port: 3000
+      initialDelaySeconds: 30
+    readinessProbe:
+      httpGet:
+        path: /api/health
+        port: 3000
+    user: 472
+    volumes:
+    - data:/data
+    configs:
+    - linkerd-grafana-config/grafana.ini:/etc/grafana/grafana.ini
+    - linkerd-grafana-config/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml
+    - linkerd-grafana-config/dashboards.yaml:/etc/grafana/provisioning/dashboards/dashboards.yaml
+    containers:
+    - env:
+      - name: LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS
+        value: |
+          -----BEGIN CERTIFICATE-----
+          MIIBiTCCAS+gAwIBAgIBATAKBggqhkjOPQQDAjAsMSowKAYDVQQDEyFpZGVudGl0
+          eS5yaW8tc3lzdGVtLmNsdXN0ZXIubG9jYWwwHhcNMTkwODI5MjMyNjE4WhcNMjAw
+          ODI4MjMyNjM4WjAsMSowKAYDVQQDEyFpZGVudGl0eS5yaW8tc3lzdGVtLmNsdXN0
+          ZXIubG9jYWwwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREvZZQk2NkSRQSfxY3
+          V6K49+R0DkhvO6zKLzt9FTLRVYCgGf2oe8Q5lpuRYcTp+riXDrFRq3Sy/Eqqlt6c
+          RdL4o0IwQDAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsG
+          AQUFBwMCMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgWVG19W9Y
+          98nyxcw8hPtn5+OKLv5GxunoZR/L7Hh2eZECIQD0FzqYwtP8FzYb3DI2NLxtP45R
+          r98nsQuK1GxPhZoyLg==
+          -----END CERTIFICATE-----
+      - LINKERD2_PROXY_LOG=warn,linkerd2_proxy=info
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-controller.${NAMESPACE}.svc.cluster.local:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_INBOUND_ACCEPT_KEEPALIVE=10000ms
+      - _pod_ns=$(self/namespace)
+      - LINKERD2_PROXY_DESTINATION_CONTEXT=ns:$(_pod_ns)
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.${NAMESPACE}.svc.cluster.local:8080
+      - _pod_sa=$(self/serviceAccount)
+      - _l5d_ns=${NAMESPACE}
+      - _l5d_trustdomain=cluster.local
+      - LINKERD2_PROXY_IDENTITY_LOCAL_NAME=$(_pod_sa).$(_pod_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_IDENTITY_SVC_NAME=linkerd-identity.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_DESTINATION_SVC_NAME=linkerd-controller.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_TAP_SVC_NAME=linkerd-tap.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      image: gcr.io/linkerd-io/proxy:stable-2.5.0
+      name: linkerd-proxy
+      livenessProbe:
+        httpGet:
+          path: /metrics
+          port: 4191
+        initialDelaySeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 4191
+        initialDelaySeconds: 2
+      ports:
+      - 4143/http,linkerd-proxy,internal=true
+      - 4191/http,linkerd-admin,internal=true
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsUser: 2102
+      volumes:
+      - linkerd-identity-end-entity:/var/run/linkerd/identity/end-entity
+    - args:
+      - --incoming-proxy-port
+      - "4143"
+      - --outgoing-proxy-port
+      - "4140"
+      - --proxy-uid
+      - "2102"
+      - --inbound-ports-to-ignore
+      - 4190,4191
+      - --outbound-ports-to-ignore
+      - "443"
+      image: gcr.io/linkerd-io/proxy-init:v1.1.0
+      name: linkerd-init
+      cpus: "10m"
+      memory: "10Mi"
+      init: true
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add:
+          - NET_ADMIN
+          - NET_RAW
+        privileged: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: false
+        runAsUser: 0
+  linkerd-proxy-injector:
+    disableServiceMesh: true
+    global_permissions:
+    - 'get,list,watch namespaces'
+    - 'list pods'
+    - 'get,list,watch apps/replicasets'
+    annotations:
+      linkerd.io/created-by: linkerd/cli stable-2.5.0
+      linkerd.io/identity-mode: default
+      linkerd.io/proxy-version: stable-2.5.0
+    labels:
+      linkerd.io/control-plane-component: proxy-injector
+      linkerd.io/control-plane-ns: ${NAMESPACE}
+      linkerd.io/proxy-deployment: linkerd-proxy-injector
+    containers:
+    - args:
+      - proxy-injector
+      - -log-level=info
+      image: gcr.io/linkerd-io/controller:stable-2.5.0
+      name: proxy-injector
+      livenessProbe:
+        httpGet:
+          path: /ping
+          port: 9995
+        initialDelaySeconds: 10
+      readinessProbe:
+        failureThreshold: 7
+        httpGet:
+          path: /ready
+          port: 9995
+      user: 2103
+      ports:
+      - 443:8443/http,proxy-injector,internal=true
+      - 9995/http,admin-http,internal=true
+      configs:
+      - linkerd-config:/var/run/linkerd/config
+      secrets:
+      - linkerd-proxy-injector-tls:/var/run/linkerd/tls
+    - env:
+      - name: LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS
+        value: |
+          -----BEGIN CERTIFICATE-----
+          MIIBiTCCAS+gAwIBAgIBATAKBggqhkjOPQQDAjAsMSowKAYDVQQDEyFpZGVudGl0
+          eS5yaW8tc3lzdGVtLmNsdXN0ZXIubG9jYWwwHhcNMTkwODI5MjMyNjE4WhcNMjAw
+          ODI4MjMyNjM4WjAsMSowKAYDVQQDEyFpZGVudGl0eS5yaW8tc3lzdGVtLmNsdXN0
+          ZXIubG9jYWwwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREvZZQk2NkSRQSfxY3
+          V6K49+R0DkhvO6zKLzt9FTLRVYCgGf2oe8Q5lpuRYcTp+riXDrFRq3Sy/Eqqlt6c
+          RdL4o0IwQDAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsG
+          AQUFBwMCMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgWVG19W9Y
+          98nyxcw8hPtn5+OKLv5GxunoZR/L7Hh2eZECIQD0FzqYwtP8FzYb3DI2NLxtP45R
+          r98nsQuK1GxPhZoyLg==
+          -----END CERTIFICATE-----
+      - LINKERD2_PROXY_LOG=warn,linkerd2_proxy=info
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-controller.${NAMESPACE}.svc.cluster.local:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_INBOUND_ACCEPT_KEEPALIVE=10000ms
+      - _pod_ns=$(self/namespace)
+      - LINKERD2_PROXY_DESTINATION_CONTEXT=ns:$(_pod_ns)
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.${NAMESPACE}.svc.cluster.local:8080
+      - _pod_sa=$(self/serviceAccount)
+      - _l5d_ns=${NAMESPACE}
+      - _l5d_trustdomain=cluster.local
+      - LINKERD2_PROXY_IDENTITY_LOCAL_NAME=$(_pod_sa).$(_pod_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_IDENTITY_SVC_NAME=linkerd-identity.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_DESTINATION_SVC_NAME=linkerd-controller.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_TAP_SVC_NAME=linkerd-tap.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      image: gcr.io/linkerd-io/proxy:stable-2.5.0
+      name: linkerd-proxy
+      livenessProbe:
+        httpGet:
+          path: /metrics
+          port: 4191
+        initialDelaySeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 4191
+        initialDelaySeconds: 2
+      ports:
+      - 4143/http,linkerd-proxy,internal=true
+      - 4191/http,linkerd-admin,internal=true
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsUser: 2102
+      volumes:
+      - linkerd-identity-end-entity:/var/run/linkerd/identity/end-entity
+    - args:
+      - --incoming-proxy-port
+      - "4143"
+      - --outgoing-proxy-port
+      - "4140"
+      - --proxy-uid
+      - "2102"
+      - --inbound-ports-to-ignore
+      - 4190,4191
+      - --outbound-ports-to-ignore
+      - "443"
+      image: gcr.io/linkerd-io/proxy-init:v1.1.0
+      name: linkerd-init
+      cpus: "10m"
+      memory: "10Mi"
+      init: true
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add:
+          - NET_ADMIN
+          - NET_RAW
+        privileged: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: false
+        runAsUser: 0
+
+  linkerd-sp-validator:
+    disableServiceMesh: true
+    global_permissions:
+    - 'list pods'
+    annotations:
+      linkerd.io/created-by: linkerd/cli stable-2.5.0
+      linkerd.io/identity-mode: default
+      linkerd.io/proxy-version: stable-2.5.0
+    labels:
+      linkerd.io/control-plane-component: sp-validator
+      linkerd.io/control-plane-ns: ${NAMESPACE}
+      linkerd.io/proxy-deployment: linkerd-sp-validator
+    containers:
+    - args:
+      - sp-validator
+      - -log-level=info
+      image: gcr.io/linkerd-io/controller:stable-2.5.0
+      name: sp-validator
+      livenessProbe:
+        httpGet:
+          path: /ping
+          port: 9997
+        initialDelaySeconds: 10
+      readinessProbe:
+        failureThreshold: 7
+        httpGet:
+          path: /ready
+          port: 9997
+      ports:
+      - 443:8443/http,sp-validator,internal=true
+      - 9997/http,admin-http,internal=true
+      user: 2103
+      secrets:
+      - linkerd-sp-validator-tls:/var/run/linkerd/tls
+    - env:
+      - name: LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS
+        value: |
+          -----BEGIN CERTIFICATE-----
+          MIIBiTCCAS+gAwIBAgIBATAKBggqhkjOPQQDAjAsMSowKAYDVQQDEyFpZGVudGl0
+          eS5yaW8tc3lzdGVtLmNsdXN0ZXIubG9jYWwwHhcNMTkwODI5MjMyNjE4WhcNMjAw
+          ODI4MjMyNjM4WjAsMSowKAYDVQQDEyFpZGVudGl0eS5yaW8tc3lzdGVtLmNsdXN0
+          ZXIubG9jYWwwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREvZZQk2NkSRQSfxY3
+          V6K49+R0DkhvO6zKLzt9FTLRVYCgGf2oe8Q5lpuRYcTp+riXDrFRq3Sy/Eqqlt6c
+          RdL4o0IwQDAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsG
+          AQUFBwMCMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgWVG19W9Y
+          98nyxcw8hPtn5+OKLv5GxunoZR/L7Hh2eZECIQD0FzqYwtP8FzYb3DI2NLxtP45R
+          r98nsQuK1GxPhZoyLg==
+          -----END CERTIFICATE-----
+      - LINKERD2_PROXY_LOG=warn,linkerd2_proxy=info
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-controller.${NAMESPACE}.svc.cluster.local:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_INBOUND_ACCEPT_KEEPALIVE=10000ms
+      - _pod_ns=$(self/namespace)
+      - LINKERD2_PROXY_DESTINATION_CONTEXT=ns:$(_pod_ns)
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.${NAMESPACE}.svc.cluster.local:8080
+      - _pod_sa=$(self/serviceAccount)
+      - _l5d_ns=${NAMESPACE}
+      - _l5d_trustdomain=cluster.local
+      - LINKERD2_PROXY_IDENTITY_LOCAL_NAME=$(_pod_sa).$(_pod_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_IDENTITY_SVC_NAME=linkerd-identity.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_DESTINATION_SVC_NAME=linkerd-controller.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_TAP_SVC_NAME=linkerd-tap.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      image: gcr.io/linkerd-io/proxy:stable-2.5.0
+      name: linkerd-proxy
+      livenessProbe:
+        httpGet:
+          path: /metrics
+          port: 4191
+        initialDelaySeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 4191
+        initialDelaySeconds: 2
+      ports:
+      - 4143/http,linkerd-proxy,internal=true
+      - 4191/http,linkerd-admin,internal=true
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsUser: 2102
+      volumes:
+      - linkerd-identity-end-entity:/var/run/linkerd/identity/end-entity
+    - args:
+      - --incoming-proxy-port
+      - "4143"
+      - --outgoing-proxy-port
+      - "4140"
+      - --proxy-uid
+      - "2102"
+      - --inbound-ports-to-ignore
+      - 4190,4191
+      - --outbound-ports-to-ignore
+      - "443"
+      image: gcr.io/linkerd-io/proxy-init:v1.1.0
+      name: linkerd-init
+      cpus: "10m"
+      memory: "10Mi"
+      init: true
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add:
+          - NET_ADMIN
+          - NET_RAW
+        privileged: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: false
+        runAsUser: 0
+  linkerd-tap:
+    disableServiceMesh: true
+    global_permissions:
+    - 'list,get,watch pods'
+    - 'list,get,watch services'
+    - 'list,get,watch replicationcontrollers'
+    - 'list,get,watch namespaces'
+    - 'list,get,watch extensions/daemonsets'
+    - 'list,get,watch apps/daemonsets'
+    - 'list,get,watch extensions/deployments'
+    - 'list,get,watch apps/deployments'
+    - 'list,get,watch extensions/replicasets'
+    - 'list,get,watch apps/replicasets'
+    - 'list,get,watch extensions/statefulsets'
+    - 'list,get,watch apps/statefulsets'
+    - 'list,get,watch extensions/jobs'
+    - 'list,get,watch batch/jobs'
+    - 'watch tap.linkerd.io/*'
+    - role=system:auth-delegator
+    annotations:
+      linkerd.io/created-by: linkerd/cli stable-2.5.0
+      linkerd.io/identity-mode: default
+      linkerd.io/proxy-version: stable-2.5.0
+    labels:
+      linkerd.io/control-plane-component: tap
+      linkerd.io/control-plane-ns: ${NAMESPACE}
+      linkerd.io/proxy-deployment: linkerd-tap
+    containers:
+    - args:
+      - tap
+      - -controller-namespace=${NAMESPACE}
+      - -log-level=info
+      image: gcr.io/linkerd-io/controller:stable-2.5.0
+      name: tap
+      livenessProbe:
+        httpGet:
+          path: /ping
+          port: 9998
+        initialDelaySeconds: 10
+      readinessProbe:
+        failureThreshold: 7
+        httpGet:
+          path: /ready
+          port: 9998
+      user: 2103
+      secrets:
+      - linkerd-tap-tls:/var/run/linkerd/tls
+      ports:
+      - 8088/grpc,grpc,internal=true
+      - 443:8089/http,apiserver,internal=true
+      - 9998/http,admin-http,internal=true
+    - env:
+      - name: LINKERD2_PROXY_IDENTITY_TRUST_ANCHORS
+        value: |
+          -----BEGIN CERTIFICATE-----
+          MIIBiTCCAS+gAwIBAgIBATAKBggqhkjOPQQDAjAsMSowKAYDVQQDEyFpZGVudGl0
+          eS5yaW8tc3lzdGVtLmNsdXN0ZXIubG9jYWwwHhcNMTkwODI5MjMyNjE4WhcNMjAw
+          ODI4MjMyNjM4WjAsMSowKAYDVQQDEyFpZGVudGl0eS5yaW8tc3lzdGVtLmNsdXN0
+          ZXIubG9jYWwwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAREvZZQk2NkSRQSfxY3
+          V6K49+R0DkhvO6zKLzt9FTLRVYCgGf2oe8Q5lpuRYcTp+riXDrFRq3Sy/Eqqlt6c
+          RdL4o0IwQDAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsG
+          AQUFBwMCMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSAAwRQIgWVG19W9Y
+          98nyxcw8hPtn5+OKLv5GxunoZR/L7Hh2eZECIQD0FzqYwtP8FzYb3DI2NLxtP45R
+          r98nsQuK1GxPhZoyLg==
+          -----END CERTIFICATE-----
+      - LINKERD2_PROXY_LOG=warn,linkerd2_proxy=info
+      - LINKERD2_PROXY_DESTINATION_SVC_ADDR=linkerd-controller.${NAMESPACE}.svc.cluster.local:8086
+      - LINKERD2_PROXY_CONTROL_LISTEN_ADDR=0.0.0.0:4190
+      - LINKERD2_PROXY_ADMIN_LISTEN_ADDR=0.0.0.0:4191
+      - LINKERD2_PROXY_OUTBOUND_LISTEN_ADDR=127.0.0.1:4140
+      - LINKERD2_PROXY_INBOUND_LISTEN_ADDR=0.0.0.0:4143
+      - LINKERD2_PROXY_DESTINATION_PROFILE_SUFFIXES=svc.cluster.local.
+      - LINKERD2_PROXY_INBOUND_ACCEPT_KEEPALIVE=10000ms
+      - _pod_ns=$(self/namespace)
+      - LINKERD2_PROXY_DESTINATION_CONTEXT=ns:$(_pod_ns)
+      - LINKERD2_PROXY_IDENTITY_DIR=/var/run/linkerd/identity/end-entity
+      - LINKERD2_PROXY_IDENTITY_TOKEN_FILE=/var/run/secrets/kubernetes.io/serviceaccount/token
+      - LINKERD2_PROXY_IDENTITY_SVC_ADDR=linkerd-identity.${NAMESPACE}.svc.cluster.local:8080
+      - _pod_sa=$(self/serviceAccount)
+      - _l5d_ns=${NAMESPACE}
+      - _l5d_trustdomain=cluster.local
+      - LINKERD2_PROXY_IDENTITY_LOCAL_NAME=$(_pod_sa).$(_pod_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_IDENTITY_SVC_NAME=linkerd-identity.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_DESTINATION_SVC_NAME=linkerd-controller.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      - LINKERD2_PROXY_TAP_SVC_NAME=linkerd-tap.$(_l5d_ns).serviceaccount.identity.$(_l5d_ns).$(_l5d_trustdomain)
+      image: gcr.io/linkerd-io/proxy:stable-2.5.0
+      name: linkerd-proxy
+      livenessProbe:
+        httpGet:
+          path: /metrics
+          port: 4191
+        initialDelaySeconds: 10
+      readinessProbe:
+        httpGet:
+          path: /ready
+          port: 4191
+        initialDelaySeconds: 2
+      ports:
+      - 4143/http,linkerd-proxy,internal=true
+      - 4191/http,linkerd-admin,internal=true
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        runAsUser: 2102
+      volumes:
+      - linkerd-identity-end-entity:/var/run/linkerd/identity/end-entity
+    - args:
+      - --incoming-proxy-port
+      - "4143"
+      - --outgoing-proxy-port
+      - "4140"
+      - --proxy-uid
+      - "2102"
+      - --inbound-ports-to-ignore
+      - 4190,4191
+      - --outbound-ports-to-ignore
+      - "443"
+      image: gcr.io/linkerd-io/proxy-init:v1.1.0
+      name: linkerd-init
+      cpus: "10m"
+      memory: "10Mi"
+      init: true
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          add:
+          - NET_ADMIN
+          - NET_RAW
+        privileged: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: false
+        runAsUser: 0
+
+kubernetes:
+  manifest: |-
+    ---
+    kind: Secret
+    apiVersion: v1
+    metadata:
+      name: linkerd-sp-validator-tls
+      namespace: ${NAMESPACE}
+      labels:
+        linkerd.io/control-plane-component: sp-validator
+        linkerd.io/control-plane-ns: ${NAMESPACE}
+      annotations:
+        linkerd.io/created-by: linkerd/cli stable-2.5.0
+    type: Opaque
+    data:
+      crt.pem: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURLVENDQWhHZ0F3SUJBZ0lSQUxYdS9PVWhnUU9EZWt0VmFpWjdlUzB3RFFZSktvWklodmNOQVFFTEJRQXcKTGpFc01Db0dBMVVFQXhNamJHbHVhMlZ5WkMxemNDMTJZV3hwWkdGMGIzSXVjbWx2TFhONWMzUmxiUzV6ZG1NdwpIaGNOTVRrd09ESTVNak15TmpJNFdoY05NakF3T0RJNE1qTXlOakk0V2pBdU1Td3dLZ1lEVlFRREV5TnNhVzVyClpYSmtMWE53TFhaaGJHbGtZWFJ2Y2k1eWFXOHRjM2x6ZEdWdExuTjJZekNDQVNJd0RRWUpLb1pJaHZjTkFRRUIKQlFBRGdnRVBBRENDQVFvQ2dnRUJBSzVIcDBGSzJvRlovYmJJdGNaUGJnOE9LZXBacDVpelh6UDlZNTlkRlZhaQo3MlNxdkdTWkZMWThXc2RPRmI3ZmVVOXJTRS9tU2NqQ2owLzFUcSs0V0UwaTl3L1lBTXZFWGl0TFFtaWw2NlpuCkNnTzFEUDRGa0RGT0NBWW5vU1crYUMxaTU3WEQ1enpLVkNjMkxOOWNpOC9vL2ZvSEpZWWJYTC8wSS8vUHVmTjMKTHViWUZrTW9wNGp2YnJTOWFhUkhTcDFUMDdWMTFMczc4OXU0Y1BCSnBaZVllVmxMV3k3VXJJalIxdGxIRU5UdQpoK2tFeWppMGJFUmcvWkxaSFdhSmVlbk9sWWR4aWZxUm1kWlRabWg5amdXVjRabEM5d0pHdEVES3htRUIwL0NwCjQxNTBDMjRxcndLbW5NSmp6bWhLWnFQMVdPbVVvNHJUSGpqOGVQcXpMeWtDQXdFQUFhTkNNRUF3RGdZRFZSMFAKQVFIL0JBUURBZ0trTUIwR0ExVWRKUVFXTUJRR0NDc0dBUVVGQndNQkJnZ3JCZ0VGQlFjREFqQVBCZ05WSFJNQgpBZjhFQlRBREFRSC9NQTBHQ1NxR1NJYjNEUUVCQ3dVQUE0SUJBUUJoNmpKbnlzaGpyd250NGJHODJPWDR6UnN5CndTTnBsSE0vVmppTTUzYVZBeW5qNHpkd2FuSDlxWFRSZ3RqT3ZlVHZKeDlUM0VLN0ZkMXloWXF3QnU1TllvVGYKNlpTRDlMQXlQOWxDSEw1bEdCaFF3NmdrT0RaWHZIb3dSZkVUbGFnUFV3dlZONkkrNjA3NzMyR1VTRmtRR0psVwpXWkRodlhNZW1kQkZBbUZFUzI2SWUxbngrbjFlQ2NCakpURTB6aTl0dGJGQjJOUm5WWTdvOEgxL0ZhbkFNVmp5Cm84L25XaTFOY1I4eEdjUWk4bHBWdWtNbnhkZlVDaENtdnBGRHZON0RjVjY4L2FNRm9Mbk1kdnhWbjExWHhGWDgKMmk5VGNpZEg3V2NWZU1aMlJ2U1VkZGE3b2dyOTd1TWRzV0dqOW4rRzBSN1VqTXJrK2JkRkcvZUpPTzFhCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+      key.pem: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBcmtlblFVcmFnVm45dHNpMXhrOXVEdzRwNmxtbm1MTmZNLzFqbjEwVlZxTHZaS3E4ClpKa1V0anhheDA0VnZ0OTVUMnRJVCtaSnlNS1BUL1ZPcjdoWVRTTDNEOWdBeThSZUswdENhS1hycG1jS0E3VU0KL2dXUU1VNElCaWVoSmI1b0xXTG50Y1BuUE1wVUp6WXMzMXlMeitqOStnY2xoaHRjdi9Rai84KzU4M2N1NXRnVwpReWluaU85dXRMMXBwRWRLblZQVHRYWFV1enZ6MjdodzhFbWxsNWg1V1V0Ykx0U3NpTkhXMlVjUTFPNkg2UVRLCk9MUnNSR0Q5a3RrZFpvbDU2YzZWaDNHSitwR1oxbE5tYUgyT0JaWGhtVUwzQWthMFFNckdZUUhUOEtualhuUUwKYmlxdkFxYWN3bVBPYUVwbW8vVlk2WlNqaXRNZU9QeDQrck12S1FJREFRQUJBb0lCQUhrd0VqbncxeWlEYjAyZgpHK2VlYkNYRDc1bXFaa1JrMXByTVpHMzR5RkhLVXpWcEZEL1B3dnRGMU1vcW5peHdNV2JzYndoQVZxWm54RWdSCmlIbmdjbWFSSGNQQ3JDc0ZqWVlGZTFSUnJCKzJIdHlkRlQrK2xwbnliTm42eksvMlMzTGtCOFA1U2Q2WHd4VFIKTXpyT205b2paaGhxeDhrTlZkMlU0ME9MS3Y4RWg3Sk14YTY3VjI3Tm45WDR4UEhIbWFxWUkraE5Mc0packFEZApiSjcvUnVKV1RGLzlIMCt3ak5oNWFneU1ZZHNlTGkwQzEvLy9lT0pXdllMdHBGM3BvU2FFam1FamNmRmZWQjlUCis3dSt6TTN4eVNKWS9kZkVodklHdGVHa1J6SjVYVHpyeERiVTQ5UUZUUzlkRnlWQlRhVUU4ZmVneWFvL0N1c3YKdFVyOW14RUNnWUVBMHlpOElYS1lVbFNQNnJldG1na0ZEdTlYMEhyZXpWbG0wOTRUUWNiRStwYWxFZFZyNmpqRwpTVzc4dW9Sb2Z1Z2Y0NlpNZ1JUSnBJejhiU05wbjZyckVxd2VkbkQ5QlJVWmJKQm1HWTJlSzR4Zm5KSXJ5Nk04CkwvcW9RaUUxU0dCK0xjbnhNUXpwSVE4NW9PN29FWWRBdlI4UXNmYzNiajNuTzN6a0ZQci82UU1DZ1lFQTAwb00Kb2NUQzVvY3cvT3lLLzB1OEM3ZHBZZGpvTWc0aExDZSs4dXI4SncwWnMwc2E5OUkzcVZCUE1ya1lHaDQ5cUlqUwpBaE1Manc4NjNGL1MyMjlkOXZyM0U1TFdwb2QrTm41TnJkWTFBN2FzMlVMWlBiOVZlOCtZdTBEdXpwN1hLQkwzCllESStKWWNvd2hqYmxKbUpMMjFKQWpHbGZKcGZEMTYzeWllTHNXTUNnWUVBbjdrdlhVbVdhS2hvV0U1cDlac2YKQldZTUVibnZjSHRRcWJCUTlxOUk3cGdtOHE5eU9yQ0paS0NjY09XWk9XMlNPWnZnUUwrZHEyZXR4VXhGS0M2YwpNL3FYN0ZXWlBrL3dkRXRodjdCODFVb1FSSm5Zb09ldnJrYzNJUmFIZkdEbzhPL1JEcDVLZGVSVFhpVjR5MUY0CnFkV214a2RPMllmZnNnTE5jQVZRc0VzQ2dZQWgxcm92TGxRSWw1NUE0NkZmUWNIY0hvUENKL3NJQ1R0RzF4YTkKME9TUlhJZkJMMFlpYW9oL2xWMFp3b3Nabzc0OFA2MWlwNm95UHo0dURTcTMraDRTY0I4aUEySmRTVlh0WkUwTQppa0h6Vms1WWZWeE5oMWNwZlJYNDUyMVhxaGpMVWo1TUtiL0tRdHRFT3Jid0ZhYmk4WjIvdkRQRXdQUjRnYkx0CnJXZXlBUUtCZ1FDbDNDdHlzU0QwVFEvKytHUUtlVlozU21nR2J4MmFjRWVFSHcyV3dHQlhJalVvZWlFdGwrR2cKbGdyWjZnRkZuVDMwZFp6UmxWaGRTcnlmRGZLWnNPVlN0WGkrTE5kT0ZhaC9XN0ZFS01nSFJEN2FlelNDdTJKUQoyU3dSYUJzNDFKbVY2WUJyZldPSXV6Y0k5c3BVQlc5WDVDRmk0SGN2aEh2aXpKWUF4S2tKMHc9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=
+    ---
+    kind: Secret
+    apiVersion: v1
+    metadata:
+      name: linkerd-proxy-injector-tls
+      namespace: rio-system
+      labels:
+        linkerd.io/control-plane-component: proxy-injector
+        linkerd.io/control-plane-ns: rio-system
+      annotations:
+        linkerd.io/created-by: linkerd/cli stable-2.5.0
+    type: Opaque
+    data:
+      crt.pem: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURMVENDQWhXZ0F3SUJBZ0lSQU4yNXpDZytObVFZd3lrMFZsNTAxbmd3RFFZSktvWklodmNOQVFFTEJRQXcKTURFdU1Dd0dBMVVFQXhNbGJHbHVhMlZ5WkMxd2NtOTRlUzFwYm1wbFkzUnZjaTV5YVc4dGMzbHpkR1Z0TG5OMgpZekFlRncweE9UQTRNamt5TXpJMk1qaGFGdzB5TURBNE1qZ3lNekkyTWpoYU1EQXhMakFzQmdOVkJBTVRKV3hwCmJtdGxjbVF0Y0hKdmVIa3RhVzVxWldOMGIzSXVjbWx2TFhONWMzUmxiUzV6ZG1Nd2dnRWlNQTBHQ1NxR1NJYjMKRFFFQkFRVUFBNElCRHdBd2dnRUtBb0lCQVFESTBwR2d6VHdxTUF2Qm5JK01tNzhlbTI2SWFjdG5zSUhoKy8vbgoxWWg0TTlqZVo0N2d5cFlUQ081bHNEWldpYlVidjVFVDRsbnFVWFUrK2FHV1ZId0FOY1VxTTBHTDJ5OGdrVC9hCnlCMmxpY3pKQXljM2N5enptNzNGcEZMTXZoVjdEeWxwb3grYStja3A1YzBFdWpQMWJBdzFIc3NJYjZ4L0ZrbHcKSEQwbmozWEwrMDVhblUvMnFXd2hnYklla0thNXE2cHFhMFRTUXF1d3BlS2lnaStLTWIyMWppT1FaZXltQnYvRgp6WXhxSUhmajRDZGRLWWJQWHN6SEtKRlptTFoxa2NiMVJJTU0xYlNaMVhydnRFK050ZXg4ZEIvVWFMYjZHTkFTCmJTOHV1eHFXaS9ueUVxbWZsWERGWURZUFVwTzhUMVBoK2QyVVhmMzcyOTBoS0pOVkFnTUJBQUdqUWpCQU1BNEcKQTFVZER3RUIvd1FFQXdJQ3BEQWRCZ05WSFNVRUZqQVVCZ2dyQmdFRkJRY0RBUVlJS3dZQkJRVUhBd0l3RHdZRApWUjBUQVFIL0JBVXdBd0VCL3pBTkJna3Foa2lHOXcwQkFRc0ZBQU9DQVFFQW5WekRZZVFwOWFhK3RFVzFkdTdyCkVacnl6VGtSdE1Jb1BvS250VWlHOGZyR0NGa2c4UzhyblBJVnEzNkkrV0hhQVFwTXZ5cVNxZ0dSSzJNNWFzakgKQURrYnNsNGt2dEdmZ1ErcDZCOS8xRE15bGVsaW4xQ3B1SmlkUzdobHhtTHNZYVFDQ0dtcTNPSVhnZDNpR0prOQpRcXNUR25aRXpacVp1ZjN3SVlRVFl1UlNWTTBEMC9IMVdzOFRqYWpkM2M1YjJmbHgyN3UyVXlhV3dBaCszbVpwCmVBSW9VUDJUMVIwNnVBK1dVSm9oWHFrd3gwZnBVRU1nME0rS3JkdTJtK05ZejdBLzdQRldCZlFYMVI0N1VZS2cKNEtIWTM3MThQZzc5QkFtRlhHUW4xUWEwa0NLV1JIQnByaWhSRnNXQXJ4RUJLL3pEQWlzb3hFRVBsb2FnMWdsbApIUT09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+      key.pem: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBeU5LUm9NMDhLakFMd1p5UGpKdS9IcHR1aUduTFo3Q0I0ZnYvNTlXSWVEUFkzbWVPCjRNcVdFd2p1WmJBMlZvbTFHNytSRStKWjZsRjFQdm1obGxSOEFEWEZLak5CaTlzdklKRS8yc2dkcFluTXlRTW4KTjNNczg1dTl4YVJTekw0VmV3OHBhYU1mbXZuSktlWE5CTG96OVd3TU5SN0xDRytzZnhaSmNCdzlKNDkxeS90TwpXcDFQOXFsc0lZR3lIcENtdWF1cWFtdEUwa0tyc0tYaW9vSXZpakc5dFk0amtHWHNwZ2IveGMyTWFpQjM0K0FuClhTbUd6MTdNeHlpUldaaTJkWkhHOVVTREROVzBtZFY2NzdSUGpiWHNmSFFmMUdpMitoalFFbTB2THJzYWxvdjUKOGhLcG41Vnd4V0EyRDFLVHZFOVQ0Zm5kbEYzOSs5dmRJU2lUVlFJREFRQUJBb0lCQUZVYzZadTlZRUtCR25wMApZR0szbjhqWkYzKzVWdndiVXZEMFhRRmsvdkh6QjNjN2JOTFpDY0lIaHdLU0xIV0E1OEZhNzZIOXpSNENhQzdJCm5qT1ltdlY3MUpTT0pMbWhxOWVodCs2QjRnN0cySVJaVWNXdWl0NjBvem1nNjNiYkdUK09yWDZZSkUwS2tMZXgKTGJOVE43Sk1tTi9xclNKbU1qV3F2SFZIZ3FQQTZYTUF3ZVJvb0x6LzdTeUtSbmpHWnlJWFJkODBrN2FiRFIwWQpCKzhQbjVTR0Z2cVBIR0xhMUVTc091OGludVpGUmhvRDV3ck1GNitjQVprOVNncWVVUjJiOU96UDNKMVNhUHRoClNQQ1NjVzl2aHU1bXllRVNqbjV3YnZqdzNUYnh0VEc0TVVGQ2Yvb1p0djNVV1dVZzBrZEozcFpuU1VYazRuNU0KSUIvMTVnRUNnWUVBNW9GcWlCVGFqWHBsanVWY0drc09rM2FjWDJwTE05M3o5RGFKSFBsUFZCUW5ONHZwNHdEUQpVaTNGR1h0YmsvR3FCYTJwREhJbm0zL0NqMkRxeTNBY0VxbVVFK3JFa3k0QWJETEpKS0JidGhTS1hLRGtlb09xClpPWlROT2JxaFBXK2VqTUF0bFlRZzFTK3RablQ1N0pRMjVUWForMGVDQTJsdlZOOEtGOG4xeXNDZ1lFQTN3aXoKcmI3aFlwUzgvSzE2cHlKdVVOTUFMWmhjV2tuL0RSUlFWck9aVzdmQ0tQVmgrZWdsQllqRTJqM0pKQW5UUEQ3NAprZTlCVG5LR2pTRTgyNm4vN0dNcmlhdDg1cHNueml5T3FDTGFwVURVV2VlRzNuV2toS1lSUjU0OWNtaWd5b2hKCmQ1UGMraFdEc3JIdW1WWDdUMkVEOWEvS2I2ZFRtcFVSa0Y2ei8zOENnWUVBME4vM0pFY1pZTmpIekx4RVFNTkEKK3htaFM4a3JTbDNYWWJaRmUwN2p0c0hvWTZwU2o5Uzk4YW51RUZBN1JRM1pUdm4xMVFSZ3BjVVpEZ241MmMzRwpjcGJlUzBvVFJYZUxCSURreWw3Um5HWnlsc3RwSHlmT3NVNFJtaitoeGtoVmliQkw5ZTU1V2pqaDgvZm9FTzRCCjNXaTc1VDMyVjcvZUwzakdhbU1IM0M4Q2dZQXhDK3pYYkg2TCswR0VIM0kxaHZEVGZWTXdzNnk3ZmtKRVVnOUkKd2I0YjJWRXRTS2ovRi9uc09hTndpdDNNdXd4azEwUTZjMjdkSFhwUlZ0blhSSTh2SUsvV1dvdmcrb1hLWlNvSgo5NEExandnanJUS1BnVGRvcEV4d2YyL3IxTzVuRzRsc2Jtdk40eVZQQ3FuNXRsckpuZ0FNNjFlTkxqTEliN2VwCkUrcHBhUUtCZ0djNWI0MVpFQTYwc1RZMVMvb0RnRXpsM0FkUzRUNWw4a2NyOHY0UDYrNUxOcUdDT0V1b3ZUMmQKZmpXVXQybGVvWTI3UjVTRlptcmZyMHJmMThSWVJPd1BMZGlIV2cxVGtyTWc4bE4xUElvcmFiczdPWjBUaFRjOQpFdTRBSzJPZGRzNzkxRWlzM2tjRXV1cnhhN1hPT0l0cmlOYStXWnNSQVcvVzRoWWw2YVBmCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0tCg==
+    ---
+    apiVersion: admissionregistration.k8s.io/v1beta1
+    kind: ValidatingWebhookConfiguration
+    metadata:
+      name: linkerd-sp-validator-webhook-config
+      labels:
+        linkerd.io/control-plane-component: sp-validator
+        linkerd.io/control-plane-ns: ${NAMESPACE}
+    webhooks:
+    - name: linkerd-sp-validator.linkerd.io
+      clientConfig:
+        service:
+          name: linkerd-sp-validator
+          namespace: ${NAMESPACE}
+          path: "/"
+        caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURLVENDQWhHZ0F3SUJBZ0lSQUxYdS9PVWhnUU9EZWt0VmFpWjdlUzB3RFFZSktvWklodmNOQVFFTEJRQXcKTGpFc01Db0dBMVVFQXhNamJHbHVhMlZ5WkMxemNDMTJZV3hwWkdGMGIzSXVjbWx2TFhONWMzUmxiUzV6ZG1NdwpIaGNOTVRrd09ESTVNak15TmpJNFdoY05NakF3T0RJNE1qTXlOakk0V2pBdU1Td3dLZ1lEVlFRREV5TnNhVzVyClpYSmtMWE53TFhaaGJHbGtZWFJ2Y2k1eWFXOHRjM2x6ZEdWdExuTjJZekNDQVNJd0RRWUpLb1pJaHZjTkFRRUIKQlFBRGdnRVBBRENDQVFvQ2dnRUJBSzVIcDBGSzJvRlovYmJJdGNaUGJnOE9LZXBacDVpelh6UDlZNTlkRlZhaQo3MlNxdkdTWkZMWThXc2RPRmI3ZmVVOXJTRS9tU2NqQ2owLzFUcSs0V0UwaTl3L1lBTXZFWGl0TFFtaWw2NlpuCkNnTzFEUDRGa0RGT0NBWW5vU1crYUMxaTU3WEQ1enpLVkNjMkxOOWNpOC9vL2ZvSEpZWWJYTC8wSS8vUHVmTjMKTHViWUZrTW9wNGp2YnJTOWFhUkhTcDFUMDdWMTFMczc4OXU0Y1BCSnBaZVllVmxMV3k3VXJJalIxdGxIRU5UdQpoK2tFeWppMGJFUmcvWkxaSFdhSmVlbk9sWWR4aWZxUm1kWlRabWg5amdXVjRabEM5d0pHdEVES3htRUIwL0NwCjQxNTBDMjRxcndLbW5NSmp6bWhLWnFQMVdPbVVvNHJUSGpqOGVQcXpMeWtDQXdFQUFhTkNNRUF3RGdZRFZSMFAKQVFIL0JBUURBZ0trTUIwR0ExVWRKUVFXTUJRR0NDc0dBUVVGQndNQkJnZ3JCZ0VGQlFjREFqQVBCZ05WSFJNQgpBZjhFQlRBREFRSC9NQTBHQ1NxR1NJYjNEUUVCQ3dVQUE0SUJBUUJoNmpKbnlzaGpyd250NGJHODJPWDR6UnN5CndTTnBsSE0vVmppTTUzYVZBeW5qNHpkd2FuSDlxWFRSZ3RqT3ZlVHZKeDlUM0VLN0ZkMXloWXF3QnU1TllvVGYKNlpTRDlMQXlQOWxDSEw1bEdCaFF3NmdrT0RaWHZIb3dSZkVUbGFnUFV3dlZONkkrNjA3NzMyR1VTRmtRR0psVwpXWkRodlhNZW1kQkZBbUZFUzI2SWUxbngrbjFlQ2NCakpURTB6aTl0dGJGQjJOUm5WWTdvOEgxL0ZhbkFNVmp5Cm84L25XaTFOY1I4eEdjUWk4bHBWdWtNbnhkZlVDaENtdnBGRHZON0RjVjY4L2FNRm9Mbk1kdnhWbjExWHhGWDgKMmk5VGNpZEg3V2NWZU1aMlJ2U1VkZGE3b2dyOTd1TWRzV0dqOW4rRzBSN1VqTXJrK2JkRkcvZUpPTzFhCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+      failurePolicy: Ignore
+      rules:
+      - operations: [ "CREATE" , "UPDATE" ]
+        apiGroups: ["linkerd.io"]
+        apiVersions: ["v1alpha1", "v1alpha2"]
+        resources: ["serviceprofiles"]
+      sideEffects: None
+    ---
+    ---
+    kind: Secret
+    apiVersion: v1
+    metadata:
+      name: linkerd-identity-issuer
+      namespace: ${NAMESPACE}
+      labels:
+        linkerd.io/control-plane-component: identity
+        linkerd.io/control-plane-ns: ${NAMESPACE}
+      annotations:
+        linkerd.io/created-by: linkerd/cli stable-2.5.0
+        linkerd.io/identity-issuer-expiry: 2020-08-28T23:26:38Z
+    data:
+      crt.pem: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUJpVENDQVMrZ0F3SUJBZ0lCQVRBS0JnZ3Foa2pPUFFRREFqQXNNU293S0FZRFZRUURFeUZwWkdWdWRHbDAKZVM1eWFXOHRjM2x6ZEdWdExtTnNkWE4wWlhJdWJHOWpZV3d3SGhjTk1Ua3dPREk1TWpNeU5qRTRXaGNOTWpBdwpPREk0TWpNeU5qTTRXakFzTVNvd0tBWURWUVFERXlGcFpHVnVkR2wwZVM1eWFXOHRjM2x6ZEdWdExtTnNkWE4wClpYSXViRzlqWVd3d1dUQVRCZ2NxaGtqT1BRSUJCZ2dxaGtqT1BRTUJCd05DQUFSRXZaWlFrMk5rU1JRU2Z4WTMKVjZLNDkrUjBEa2h2TzZ6S0x6dDlGVExSVllDZ0dmMm9lOFE1bHB1UlljVHArcmlYRHJGUnEzU3kvRXFxbHQ2YwpSZEw0bzBJd1FEQU9CZ05WSFE4QkFmOEVCQU1DQVFZd0hRWURWUjBsQkJZd0ZBWUlLd1lCQlFVSEF3RUdDQ3NHCkFRVUZCd01DTUE4R0ExVWRFd0VCL3dRRk1BTUJBZjh3Q2dZSUtvWkl6ajBFQXdJRFNBQXdSUUlnV1ZHMTlXOVkKOThueXhjdzhoUHRuNStPS0x2NUd4dW5vWlIvTDdIaDJlWkVDSVFEMEZ6cVl3dFA4RnpZYjNESTJOTHh0UDQ1UgpyOThuc1F1SzFHeFBoWm95TGc9PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+      key.pem: LS0tLS1CRUdJTiBFQyBQUklWQVRFIEtFWS0tLS0tCk1IY0NBUUVFSUlIUStQUU51dkpMbmhCM0w4ODhRQXJORXpZaDJzZmhsL1p6QnQyVkkzaExvQW9HQ0NxR1NNNDkKQXdFSG9VUURRZ0FFUkwyV1VKTmpaRWtVRW44V04xZWl1UGZrZEE1SWJ6dXN5aTg3ZlJVeTBWV0FvQm45cUh2RQpPWmFia1dIRTZmcTRsdzZ4VWF0MHN2eEtxcGJlbkVYUytBPT0KLS0tLS1FTkQgRUMgUFJJVkFURSBLRVktLS0tLQo=
+    ---
+    apiVersion: batch/v1beta1
+    kind: CronJob
+    metadata:
+      name: linkerd-heartbeat
+      namespace: ${NAMESPACE}
+      labels:
+        linkerd.io/control-plane-component: heartbeat
+        linkerd.io/control-plane-ns: ${NAMESPACE}
+      annotations:
+        linkerd.io/created-by: linkerd/cli stable-2.5.0
+    spec:
+      schedule: "36 23 * * * "
+      successfulJobsHistoryLimit: 0
+      jobTemplate:
+        spec:
+          template:
+            metadata:
+              labels:
+                linkerd.io/control-plane-component: heartbeat
+              annotations:
+                linkerd.io/created-by: linkerd/cli stable-2.5.0
+            spec:
+              serviceAccountName: linkerd-heartbeat
+              restartPolicy: Never
+              containers:
+              - name: heartbeat
+                image: gcr.io/linkerd-io/controller:stable-2.5.0
+                imagePullPolicy: IfNotPresent
+                args:
+                - "heartbeat"
+                - "-prometheus-url=http://linkerd-prometheus.${NAMESPACE}.svc.cluster.local:9090"
+                - "-controller-namespace=${NAMESPACE}"
+                - "-log-level=info"
+                resources:
+                securityContext:
+                  runAsUser: 2103
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: Role
+    metadata:
+      name: linkerd-heartbeat
+      namespace: ${NAMESPACE}
+      labels:
+        linkerd.io/control-plane-ns: ${NAMESPACE}
+    rules:
+    - apiGroups: [""]
+      resources: ["configmaps"]
+      verbs: ["get"]
+      resourceNames: ["linkerd-config"]
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: linkerd-heartbeat
+      namespace: ${NAMESPACE}
+      labels:
+        linkerd.io/control-plane-ns: ${NAMESPACE}
+    roleRef:
+      kind: Role
+      name: linkerd-heartbeat
+      apiGroup: rbac.authorization.k8s.io
+    subjects:
+    - kind: ServiceAccount
+      name: linkerd-heartbeat
+      namespace: ${NAMESPACE}
+    ---
+    kind: ServiceAccount
+    apiVersion: v1
+    metadata:
+      name: linkerd-heartbeat
+      namespace: ${NAMESPACE}
+      labels:
+        linkerd.io/control-plane-component: heartbeat
+        linkerd.io/control-plane-ns: ${NAMESPACE}
+    ---
+    apiVersion: rbac.authorization.k8s.io/v1
+    kind: RoleBinding
+    metadata:
+      name: linkerd-rio-system-tap-auth-reader
+      namespace: kube-system
+      labels:
+        linkerd.io/control-plane-component: tap
+        linkerd.io/control-plane-ns: rio-system
+    roleRef:
+      apiGroup: rbac.authorization.k8s.io
+      kind: Role
+      name: extension-apiserver-authentication-reader
+    subjects:
+    - kind: ServiceAccount
+      name: linkerd-tap
+      namespace: rio-system
+    ---
+    apiVersion: apiregistration.k8s.io/v1
+    kind: APIService
+    metadata:
+      name: v1alpha1.tap.linkerd.io
+      labels:
+        linkerd.io/control-plane-component: tap
+        linkerd.io/control-plane-ns: rio-system
+    spec:
+      group: tap.linkerd.io
+      version: v1alpha1
+      groupPriorityMinimum: 1000
+      versionPriority: 100
+      service:
+        name: linkerd-tap
+        namespace: rio-system
+      caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURGekNDQWYrZ0F3SUJBZ0lSQVBXQW81VnRCeHIyTVFzZGhRQXJldTR3RFFZSktvWklodmNOQVFFTEJRQXcKSlRFak1DRUdBMVVFQXhNYWJHbHVhMlZ5WkMxMFlYQXVjbWx2TFhONWMzUmxiUzV6ZG1Nd0hoY05NVGt3T0RJNQpNak15TmpJNFdoY05NakF3T0RJNE1qTXlOakk0V2pBbE1TTXdJUVlEVlFRREV4cHNhVzVyWlhKa0xYUmhjQzV5CmFXOHRjM2x6ZEdWdExuTjJZekNDQVNJd0RRWUpLb1pJaHZjTkFRRUJCUUFEZ2dFUEFEQ0NBUW9DZ2dFQkFMbjMKbTk4b2JiWHRXZThkYWhpRUprd1VCRnpWdy9Wb0oyVS9ldHdnbFg1bVd0Qk9QWFhGZG9ITGFudnI3dXVzL1BVcApSNnJ3YjVrck5LLzlqaGFMdnFHOUtxM1pKRmJYLzBWejFSL21iNHlBV1BzQ0xnb2pPVDJ2TzRyTEZOdWRCZkxqCkNuUHpnVEV5a0s2cS9jOVBVS3J4VGpJMmtoMndDZDltRVp4bG9OV2o3LzVGM2I0akJsSkRRaFdkV3kyN0JlSEoKdjBSYTBUQTZHcE80bmdseXJPWXFHUkJDVmtVaWhiWnU5YVlsaEtOdG5JZlA4Vlc4M0VLWklWdFIwcGJTS1FZdAo2aWFOTzNnMjRDUEhHbllpdzBwWnh1RWFIL3RkNkpBQllsR1pVVFZOZTZBRVdPbTIydkVsVUFhQ2ZJZkk0OHlHClY0bCtObXBjMlBOZk5CSyt4QmNDQXdFQUFhTkNNRUF3RGdZRFZSMFBBUUgvQkFRREFnS2tNQjBHQTFVZEpRUVcKTUJRR0NDc0dBUVVGQndNQkJnZ3JCZ0VGQlFjREFqQVBCZ05WSFJNQkFmOEVCVEFEQVFIL01BMEdDU3FHU0liMwpEUUVCQ3dVQUE0SUJBUUN3YWMwVFpmTnloZmJ1ajJ3RDVQR3NmNE9XT0tDZTQ4dmI2cDQ4Z3c4elppK1ZrQm5MCno4VUQwQ3JHdnZ3c2IvcFpvTGJaRXhjMnJDYXl1VDJVa2RyU3RPZnBPZlpvRGVGTkpqczRvem9ZVDlXbFZ6T2EKQmtGM0d6T0NDV2NIYXl5bWd0K3FVanQ5TDF6V3N2Wm9lbExXV2J3M3FjYUlFalRiRnZCaHNkb21qQ2ExcVFIOQpqejJpRVFjellFNEZRU1BncFk2UkxFaGRzTUJOcGg4NG9hVFNkbHVUaXFHTU91Vy9UWDRFaDd5NHVQYW5Eck01ClFzeFlvWEI5MkE3Z1grZG5WVW1rZmd1eXU0Nm9HWmV6YjhXVkMxakVMRWN3djVWOHBYNEltSitFeDN1Y1FYTVAKMVpOOU5OMmxUdU8xZ2lxTVFSRjVmS3lGSzZtMlVUL1RGbWE3Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+    ---
+    kind: Secret
+    apiVersion: v1
+    metadata:
+      name: linkerd-tap-tls
+      namespace: rio-system
+      labels:
+        linkerd.io/control-plane-component: tap
+        linkerd.io/control-plane-ns: rio-system
+      annotations:
+        linkerd.io/created-by: linkerd/cli stable-2.5.0
+    type: Opaque
+    data:
+      crt.pem: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURGekNDQWYrZ0F3SUJBZ0lSQVBXQW81VnRCeHIyTVFzZGhRQXJldTR3RFFZSktvWklodmNOQVFFTEJRQXcKSlRFak1DRUdBMVVFQXhNYWJHbHVhMlZ5WkMxMFlYQXVjbWx2TFhONWMzUmxiUzV6ZG1Nd0hoY05NVGt3T0RJNQpNak15TmpJNFdoY05NakF3T0RJNE1qTXlOakk0V2pBbE1TTXdJUVlEVlFRREV4cHNhVzVyWlhKa0xYUmhjQzV5CmFXOHRjM2x6ZEdWdExuTjJZekNDQVNJd0RRWUpLb1pJaHZjTkFRRUJCUUFEZ2dFUEFEQ0NBUW9DZ2dFQkFMbjMKbTk4b2JiWHRXZThkYWhpRUprd1VCRnpWdy9Wb0oyVS9ldHdnbFg1bVd0Qk9QWFhGZG9ITGFudnI3dXVzL1BVcApSNnJ3YjVrck5LLzlqaGFMdnFHOUtxM1pKRmJYLzBWejFSL21iNHlBV1BzQ0xnb2pPVDJ2TzRyTEZOdWRCZkxqCkNuUHpnVEV5a0s2cS9jOVBVS3J4VGpJMmtoMndDZDltRVp4bG9OV2o3LzVGM2I0akJsSkRRaFdkV3kyN0JlSEoKdjBSYTBUQTZHcE80bmdseXJPWXFHUkJDVmtVaWhiWnU5YVlsaEtOdG5JZlA4Vlc4M0VLWklWdFIwcGJTS1FZdAo2aWFOTzNnMjRDUEhHbllpdzBwWnh1RWFIL3RkNkpBQllsR1pVVFZOZTZBRVdPbTIydkVsVUFhQ2ZJZkk0OHlHClY0bCtObXBjMlBOZk5CSyt4QmNDQXdFQUFhTkNNRUF3RGdZRFZSMFBBUUgvQkFRREFnS2tNQjBHQTFVZEpRUVcKTUJRR0NDc0dBUVVGQndNQkJnZ3JCZ0VGQlFjREFqQVBCZ05WSFJNQkFmOEVCVEFEQVFIL01BMEdDU3FHU0liMwpEUUVCQ3dVQUE0SUJBUUN3YWMwVFpmTnloZmJ1ajJ3RDVQR3NmNE9XT0tDZTQ4dmI2cDQ4Z3c4elppK1ZrQm5MCno4VUQwQ3JHdnZ3c2IvcFpvTGJaRXhjMnJDYXl1VDJVa2RyU3RPZnBPZlpvRGVGTkpqczRvem9ZVDlXbFZ6T2EKQmtGM0d6T0NDV2NIYXl5bWd0K3FVanQ5TDF6V3N2Wm9lbExXV2J3M3FjYUlFalRiRnZCaHNkb21qQ2ExcVFIOQpqejJpRVFjellFNEZRU1BncFk2UkxFaGRzTUJOcGg4NG9hVFNkbHVUaXFHTU91Vy9UWDRFaDd5NHVQYW5Eck01ClFzeFlvWEI5MkE3Z1grZG5WVW1rZmd1eXU0Nm9HWmV6YjhXVkMxakVMRWN3djVWOHBYNEltSitFeDN1Y1FYTVAKMVpOOU5OMmxUdU8xZ2lxTVFSRjVmS3lGSzZtMlVUL1RGbWE3Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+      key.pem: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBdWZlYjN5aHR0ZTFaN3gxcUdJUW1UQlFFWE5YRDlXZ25aVDk2M0NDVmZtWmEwRTQ5CmRjVjJnY3RxZSt2dTY2ejg5U2xIcXZCdm1TczByLzJPRm91K29iMHFyZGtrVnRmL1JYUFZIK1p2aklCWSt3SXUKQ2lNNVBhODdpc3NVMjUwRjh1TUtjL09CTVRLUXJxcjl6MDlRcXZGT01qYVNIYkFKMzJZUm5HV2cxYVB2L2tYZAp2aU1HVWtOQ0ZaMWJMYnNGNGNtL1JGclJNRG9hazdpZUNYS3M1aW9aRUVKV1JTS0Z0bTcxcGlXRW8yMmNoOC94ClZiemNRcGtoVzFIU2x0SXBCaTNxSm8wN2VEYmdJOGNhZGlMRFNsbkc0Um9mKzEzb2tBRmlVWmxSTlUxN29BUlkKNmJiYThTVlFCb0o4aDhqanpJWlhpWDQyYWx6WTgxODBFcjdFRndJREFRQUJBb0lCQUg5Y0Qza0doQlJyS0FOMQpucHFKcm55OTNMc0Rmei9MZytkNFVSaitpOE5VTCsrbkZicFpjSzYxZEFqSWJRa2tvTno1MTJZL1lmNkJNNFV2CjNpYWNzQUt1dmRMditrNHJnVnk4Vm9LUlcyWGE1SldMU2FLUnV2cit6b1ZnVGJtVjBXUWxqNXdYY1N3VFdEajMKUy9tMWRTYU5PaU56Y2lBNDFwb1RtZzRGSCtBUFNpUHRnMlhwYWNuOEE5Z1lQTGdOanZWbzJvcXp0R3BCbjRYQQphQm1qaWRRV0lDaXBHWFpPbGFKZGhZSyt2dko1K01VVjBvcjNOd3puZHVEQTFjYjNRcXlsditpN3cwRU5oTFBPCjhqemliMm92clVqWWxKTjJkMEszQ1hjdkgzT2k0di9iUksrSmhTYjUxaUZZbGNnUkN6ckhsSVBQTXl6NkEwSUQKU25jbkhka0NnWUVBMDIreGh1dm1BdE80TzdTU01XYzRkRy82aG1ycUNDbmxqdm5PSUQxT2xzZjVjSVJVcVkrNgppeG94SlpiRFJwb0VCa0UzdStnUWxwaGdRTmdJOE92VE9PTGczSlJDeWk4eEh4NVh0M2ZxbVFPQ2pZYTNQdWtpCmR0L0svWHZMTjZZV1ZMdDZ5SWFpWXFFd2J4QS9RSS9PWUJwMUVsNzd2b3ZDSC94ZW5LWVhFbHNDZ1lFQTRTbXoKSXlwN1RNcGdDQUVHMkxab0ozYkYxQXpTN3lZSzd6UUFtWkFZSW1yVFU3amNYK044ZW50MkY0OTFsR2ExYVMwWApBU1k2d3loUHRGdnVRSW4rY2FGRDQ4RTJJYlBLcTZvbUt2UjVQaXhuU1M4QktTRzZuYVBoSEdFc0RiYlUzNHZmCkhHb1lLQVlpSmdodnNhcTVBdURMSE4zM3BVREdsVERrVlNJZkNmVUNnWUVBbzIxUjZ0ZXJrY1BVUTFIdkxnQjYKd29WTFAxcWtTbXNYNU10eFo3bjdaTkJ0SFdzcmhXUnk2OUh5NnZyOU5UVVdwejhCdFZ4S2RoeVJTWTJ5VzRYcwpYYXYvNG44Mm9OQ1pSMVJNdUtNWDBlM0VtMS9sZzlydnFMS1NWQnU3bCtmb210WE9zZkJlMDUyRHNsVDhqd3FZCm1lL1pUYm5kSEFzcW9VNlFVc1NPVU1FQ2dZRUF4bHgrUEpUSVd6Wk9zNzV6MGFlZ3ltT1FsT2RYVE9ndTZkemUKU21ydldDTFVXZ1daMzhBQmdjWVNtMTcvTHVYdEcrTmxTTlh0SHREOHB0LzJYVlUwbTlaK2dMOU9lUkp6a2hncgoxOXZZbERWNktMY0lScnc0TTNpVWNQUUtZMnFXenZuaWJKM3EraGV0TGVSd3dneXRRU1BZekcyZ0ppMlN4UXgxCm02cWJ2YUVDZ1lBditKbkIycjFYQUJub3JJUXFHNkZmRGZVZVI2cU44SVZNNnpSSktPUFZjRFBrVVBzd2g2bEQKZjdTMmZnKzFidjRpTzEzZXdsd2VwOXB3SFRNUmRieFAwZldmZngwT1Vwa3BMOGtsc25XZXRZeWRGcng5NlBUVQpjaXhBVHhpK0I1UEVhUGNUVFlWUGhQeTJBV24wam5TdmN3b2xjVjVIeG91SWxNMm5xL3ZoK1E9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=
+    ---
+    apiVersion: admissionregistration.k8s.io/v1beta1
+    kind: MutatingWebhookConfiguration
+    metadata:
+      name: linkerd-proxy-injector-webhook-config
+      labels:
+        linkerd.io/control-plane-component: proxy-injector
+        linkerd.io/control-plane-ns: rio-system
+    webhooks:
+    - name: linkerd-proxy-injector.linkerd.io
+      namespaceSelector:
+        matchExpressions:
+        - key: linkerd.io/is-control-plane
+          operator: DoesNotExist
+      clientConfig:
+        service:
+          name: linkerd-proxy-injector
+          namespace: rio-system
+          path: "/"
+        caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURMVENDQWhXZ0F3SUJBZ0lSQU4yNXpDZytObVFZd3lrMFZsNTAxbmd3RFFZSktvWklodmNOQVFFTEJRQXcKTURFdU1Dd0dBMVVFQXhNbGJHbHVhMlZ5WkMxd2NtOTRlUzFwYm1wbFkzUnZjaTV5YVc4dGMzbHpkR1Z0TG5OMgpZekFlRncweE9UQTRNamt5TXpJMk1qaGFGdzB5TURBNE1qZ3lNekkyTWpoYU1EQXhMakFzQmdOVkJBTVRKV3hwCmJtdGxjbVF0Y0hKdmVIa3RhVzVxWldOMGIzSXVjbWx2TFhONWMzUmxiUzV6ZG1Nd2dnRWlNQTBHQ1NxR1NJYjMKRFFFQkFRVUFBNElCRHdBd2dnRUtBb0lCQVFESTBwR2d6VHdxTUF2Qm5JK01tNzhlbTI2SWFjdG5zSUhoKy8vbgoxWWg0TTlqZVo0N2d5cFlUQ081bHNEWldpYlVidjVFVDRsbnFVWFUrK2FHV1ZId0FOY1VxTTBHTDJ5OGdrVC9hCnlCMmxpY3pKQXljM2N5enptNzNGcEZMTXZoVjdEeWxwb3grYStja3A1YzBFdWpQMWJBdzFIc3NJYjZ4L0ZrbHcKSEQwbmozWEwrMDVhblUvMnFXd2hnYklla0thNXE2cHFhMFRTUXF1d3BlS2lnaStLTWIyMWppT1FaZXltQnYvRgp6WXhxSUhmajRDZGRLWWJQWHN6SEtKRlptTFoxa2NiMVJJTU0xYlNaMVhydnRFK050ZXg4ZEIvVWFMYjZHTkFTCmJTOHV1eHFXaS9ueUVxbWZsWERGWURZUFVwTzhUMVBoK2QyVVhmMzcyOTBoS0pOVkFnTUJBQUdqUWpCQU1BNEcKQTFVZER3RUIvd1FFQXdJQ3BEQWRCZ05WSFNVRUZqQVVCZ2dyQmdFRkJRY0RBUVlJS3dZQkJRVUhBd0l3RHdZRApWUjBUQVFIL0JBVXdBd0VCL3pBTkJna3Foa2lHOXcwQkFRc0ZBQU9DQVFFQW5WekRZZVFwOWFhK3RFVzFkdTdyCkVacnl6VGtSdE1Jb1BvS250VWlHOGZyR0NGa2c4UzhyblBJVnEzNkkrV0hhQVFwTXZ5cVNxZ0dSSzJNNWFzakgKQURrYnNsNGt2dEdmZ1ErcDZCOS8xRE15bGVsaW4xQ3B1SmlkUzdobHhtTHNZYVFDQ0dtcTNPSVhnZDNpR0prOQpRcXNUR25aRXpacVp1ZjN3SVlRVFl1UlNWTTBEMC9IMVdzOFRqYWpkM2M1YjJmbHgyN3UyVXlhV3dBaCszbVpwCmVBSW9VUDJUMVIwNnVBK1dVSm9oWHFrd3gwZnBVRU1nME0rS3JkdTJtK05ZejdBLzdQRldCZlFYMVI0N1VZS2cKNEtIWTM3MThQZzc5QkFtRlhHUW4xUWEwa0NLV1JIQnByaWhSRnNXQXJ4RUJLL3pEQWlzb3hFRVBsb2FnMWdsbApIUT09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K
+      failurePolicy: Ignore
+      rules:
+      - operations: [ "CREATE" ]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+      sideEffects: None
+    ---
+    kind: Service
+    apiVersion: v1
+    metadata:
+      name: linkerd-destination
+      namespace: rio-system
+    spec:
+      type: ClusterIP
+      selector:
+        app: linkerd-controller
+      ports:
+      - name: grpc
+        port: 8086
+        targetPort: 8086
+    ---

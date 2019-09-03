@@ -9,17 +9,17 @@ const (
 )
 
 var (
-	ControllerImage                = "rancher/rio-controller"
-	ControllerImageTag             = "dev"
-	ClusterDomainName              = "cluster-domain"
-	DefaultHTTPOpenPort            = "80"
-	DefaultHTTPSOpenPort           = "443"
-	InstallMode                    = InstallModeIngress
-	UseIPAddress                   = ""
-	ServiceCidr                    = ""
-	DefaultServiceVersion          = "v0"
-	GatewaySecretName              = "rio-certs"
-	IstioGateway                   = "istio-gateway"
+	ControllerImage       = "rancher/rio-controller"
+	ControllerImageTag    = "dev"
+	ClusterDomainName     = "cluster-domain"
+	DefaultHTTPOpenPort   = "80"
+	DefaultHTTPSOpenPort  = "443"
+	InstallMode           = InstallModeIngress
+	UseIPAddress          = ""
+	ServiceCidr           = ""
+	DefaultServiceVersion = "v0"
+	GatewaySecretName     = "rio-certs"
+
 	IstioMeshConfigKey             = "meshConfig"
 	IstionConfigMapName            = "mesh"
 	IstioSidecarTemplateName       = "sidecarTemplate"
@@ -44,8 +44,12 @@ var (
 	DisableGrafana     = false
 	DisableIstio       = false
 	DisableKiali       = false
+	DisableLinkerd     = false
 	DisableLetsencrypt = false
 	DisableMixer       = false
 	DisablePrometheus  = false
 	DisableRdns        = false
+
+	ServiceMeshMode = "linkerd"
+	GatewayName     = "linkerd-gateway"
 )

@@ -2,6 +2,7 @@ package routing
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 
 	"github.com/rancher/rio/modules/istio/controllers/app"
@@ -15,6 +16,7 @@ import (
 	"github.com/rancher/rio/pkg/features"
 	"github.com/rancher/rio/pkg/stack"
 	"github.com/rancher/rio/types"
+	"github.com/rancher/wrangler/pkg/start"
 )
 
 func Register(ctx context.Context, rContext *types.Context) error {
@@ -23,11 +25,17 @@ func Register(ctx context.Context, rContext *types.Context) error {
 		FeatureName: "istio",
 		FeatureSpec: projectv1.FeatureSpec{
 			Description: "Service routing using Istio",
-			Enabled:     !constants.DisableIstio,
+			Enabled:     constants.ServiceMeshMode == "istio",
+			Answers: map[string]string{
+				"KIALI_USERNAME":   base64.StdEncoding.EncodeToString([]byte("admin")),
+				"KIALI_PASSPHRASE": base64.StdEncoding.EncodeToString([]byte("admin")),
+			},
 		},
 		SystemStacks: []*stack.SystemStack{
-			stack.NewSystemStack(apply, rContext.Namespace, "mesh"),
+			stack.NewSystemStack(apply, rContext.Namespace, "istio-mesh"),
+			stack.NewSystemStack(apply, rContext.Namespace, "istio-crd"),
 			stack.NewSystemStack(apply, rContext.Namespace, "istio"),
+			stack.NewSystemStack(apply, rContext.Namespace, "istio-grafana"),
 		},
 		Controllers: []features.ControllerRegister{
 			externalservice.Register,
@@ -42,8 +50,15 @@ func Register(ctx context.Context, rContext *types.Context) error {
 			"HTTPS_PORT":        constants.DefaultHTTPSOpenPort,
 			"TELEMETRY_ADDRESS": fmt.Sprintf("%s.%s.svc.cluster.local", constants.IstioTelemetry, rContext.Namespace),
 			"NAMESPACE":         rContext.Namespace,
-			"TAG":               "1.1.3",
+			"TAG":               "1.2.5",
 			"INSTALL_MODE":      constants.InstallMode,
+		},
+		OnStart: func(feature *projectv1.Feature) error {
+			return start.All(ctx, 5,
+				rContext.Global,
+				rContext.Networking,
+				rContext.K8sNetworking,
+			)
 		},
 	}
 

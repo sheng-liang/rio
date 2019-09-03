@@ -105,10 +105,6 @@ func (s serviceHandler) populate(obj runtime.Object, namespace *corev1.Namespace
 	revVs := populate.VirtualServiceFromSpec(true, s.systemNamespace, app.Name, app.Namespace, clusterDomain, deepcopy, dests...)
 	os.Add(revVs)
 
-	if clusterDomain.Status.ClusterDomain != "" && constants.InstallMode == constants.InstallModeIngress {
-		populate.Ingress(s.systemNamespace, clusterDomain.Status.ClusterDomain, clusterDomain.Spec.SecretRef.Name, true, revision, os)
-	}
-
 	return nil
 }
 

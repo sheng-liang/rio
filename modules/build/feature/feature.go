@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 
+	"github.com/rancher/wrangler/pkg/start"
+
 	"github.com/rancher/rio/modules/build/controllers/build"
 	"github.com/rancher/rio/modules/build/controllers/gitcommit"
 	"github.com/rancher/rio/modules/build/controllers/pod"
@@ -54,6 +56,12 @@ func Register(ctx context.Context, rContext *types.Context) error {
 			"NAMESPACE":      rContext.Namespace,
 			"RUNTIME":        runtime,
 			"SOCKET_ADDRESS": socket,
+		},
+		OnStart: func(feature *v1.Feature) error {
+			return start.All(ctx, 5,
+				rContext.Build,
+				rContext.Webhook,
+			)
 		},
 	}
 	return feature.Register()

@@ -25,7 +25,7 @@ func Gateway(systemNamespace, clusterDomain, certName string, publicdomains []*v
 	// Istio Gateway
 	gws := v1alpha3.GatewaySpec{
 		Selector: map[string]string{
-			"app": constants.IstioGateway,
+			"app": constants.GatewayName,
 		},
 	}
 
