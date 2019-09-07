@@ -1,9 +1,9 @@
 # Documentation
 
-## Usage
+## Table of Contents
 
 - [Install Options](#install-options)
-- [Concept](#concept)
+- [Concepts](#concepts)
 - [Running workloads](#running-workload)
   - [Canary Deployment](#canary-deployment)
   - [Automatic DNS and HTTPS](#automatic-dns-and-https)
@@ -20,37 +20,63 @@
   - [Setting private registry](#set-custom-build-arguments-and-docker-registry)
   - [Setting Pull Request Feature](#enable-pull-request-experimental)
   - [View Build logs](#view-build-logs)
-- [Using Riofile to build and develop](#using-riofile-to-build-and-develop-application)
-- [Advanced options](#advanced-options)
+- [Local Developer Setup](#local-developer-setup)
 - [FAQ](#faq)
 
-### Install Options
-Rio provides three install options for users. 
+## Install Options
+Rio provides a number of options when installed using `rio install`.
 
-* `ingress`: Rio will use existing ingress controller and ingress resource to expose gateway services. All the traffic will go through ingress then inside cluster. Starting v0.4.0 this is the default mode.
-* `svclb`: Rio will use service loadbalancer to expose gateway services. 
-* `hostport`: Rio will expose hostport for gateway services.
+* `mode`: How Rio exposes the service mesh gateway. All HTTP requests to Rio services go through the gateway. There are three options:
 
-## Concept
+| Mode | Description |
+|------|-------------|
+| `ingress` | Rio will use existing ingress controller and ingress resource to expose gateway services. All the traffic will go through ingress. Starting v0.4.0 this is the default mode. |
+| `svclb` | Rio will use service loadbalancer to expose gateway services. | 
+| `hostport` | Rio will expose hostport for gateway services. |
+
+* `http-port`: HTTP port gateway service will listen. You can only set the HTTP port if install mode is svclb or hostport. Default HTTP port for svclb and hostport mode is 9080. If install mode is ingress, HTTP port is determined by ingress and cannot be changed by Rio installer. Ingress controllers typically expose HTTP port 80, although some ingress controllers allow you to specify custom HTTP ports.
+* `https-port`: HTTPS port gateway service will listen. You can only set the HTTPS port if install mode is svclb or hostport. Default HTTPS port for svclb and hostport mode is 9443. If install mode is ingress, HTTPS port is determined by ingress and cannot be changed by Rio installer. Ingress controllers typically expose HTTPS port 443, although some ingress controllers allow you to specify custom HTTPS ports.
+* `ip-address`: Rio generates DNS domains that map to IP address of the gateway. Rio will attempt to detect gateway IP addresses automatically, and you can override by manually specify comma-separated IP addresses.
+* `service-cidr`: Rio will attempt to detect service CIDR for service mesh intercept traffic. You can override by manually specify a service CIDR.
+* `disable-features`: Specify feature to disable during install. Here are the available feature list.
+
+| Feature | Description |
+|----------|----------------|
+| autoscaling | Auto-scaling services based on QPS and requests load
+| build | Rio Build, from source code to deployment
+| grafana | Grafana Dashboard
+| istio | Service routing using Istio
+| kiali | Kiali Dashboard
+| letsencrypt | Let's Encrypt
+| mixer | Istio Mixer telemetry
+| prometheus | Enable prometheus
+| rdns | Assign cluster a hostname from public Rancher DNS service
+
+* `httpproxy`: Specify HTTP_PROXY environment variable for Rio control plane. This is useful when Rio is installed behind an HTTP firewall.
+* `lite`: Disable all monitoring features including prometheus, mixer, grafana and kiali.
+
+## Concepts
+
+Rio introduces a small number of new concepts: Service, Apps, Router, External Service, and Domain. In addition, it reuses two existing Kubernetes resources: ConfigMaps and Secrets.
+
+The power of Rio resides in its ability to utilize the power of Kubernetes, Istio service mesh, Knative, and Tekton CI/CD through a simple set of concepts.
 
 ### Service
 
-The main unit that is being dealt with in Rio are services. Services are just a scalable set of containers that provide a
-similar function. When you run containers in Rio you are really creating a Service. `rio run` and `rio create` will
-create a service. You can later scale that service with `rio scale`. Services are assigned a DNS name so that group
-of containers can be accessed from other services.
+Service is the core concept in Rio. Services are a scalable set of identical containers.
+When you run containers in Rio you create a Service. `rio run` and `rio create` will
+create a service. You can scale that service with `rio scale`. Services are assigned a DNS name so that it can be discovered and accessed from other services.
 
 ### Apps
 
-An App contains multiple service revisions. Each service in Rio is assigned an app and version. Services that have the same app but
-different versions are reference to as revisions. The group of all revisions for an app is what is called an App or application in Rio.
+An App contains multiple services, and each service can have multiple revisions. Each service in Rio is assigned an app and a version. Services that have the same app but different versions are referred to as revisions.
 An application named `foo` will be given a DNS name like `foo.clusterdomain.on-rio.io` and each version is assigned it's own DNS name. If the app was
 `foo` and the version is `v2` the assigned DNS name for that revision would be similar to `foo-v2.clusterdomain.on-rio.io`. `rio ps` and `rio revision` will
 list the assigned DNS names.
 
 ### Router
 
-Router is a virtual service that load balances and routes traffic to other services. Routing rules can route based
+Router is a resource that manages load balancing and traffic routing rules. Routing rules can route based
 on hostname, path, HTTP headers, protocol, and source.
 
 ### External Service
@@ -63,15 +89,13 @@ Public Domain can be configured to assign a service or router a vanity domain li
 
 ### Configs
 
-ConfigMaps(Kubernetes resource) can be referenced by Rio services. It is a piece of configuration which can be mounted into pods so that it can be separated from image artifacts.
-It can be created separated in the existing cluster and referenced by Rio service.
+ConfigMaps are a standard Kubernetes resource and can be referenced by Rio services. It is a piece of configuration which can be mounted into pods so that configuration data can be separated from image artifacts.
 
 ### Secrets
 
-Secrets(Kubernetes resource) can be referenced by rio services. It contains sensitive data which can be mounted into pods to consume. Secrets can also be created separated in the existing
-cluster and referenced by rio services. 
+Secrets are a standard Kubernetes resource and can be referenced by rio services. It contains sensitive data which can be mounted into pods. 
 
-### Running workload
+## Running workload
 
 To deploy workload to rio:
 ```bash
@@ -91,7 +115,7 @@ Hello World
 
 Rio provides a similar experience as Docker CLI when running a container. Run `rio run --help` to see more options.
 
-##### Canary Deployment
+### Canary Deployment
 Rio allows you to easily configure canary deployment by staging services and shifting traffic between revisions.
 
 ```bash
@@ -149,18 +173,17 @@ Name            CREATED             ENDPOINT                                    
 default/demo1   7 minutes ago       https://demo1-default.5yt5mw.on-rio.io:9443   v0,v3       3,3       5%,95%    
 ```
 
-##### Automatic DNS and HTTPS
-By default Rio will create a DNS record pointing to your cluster. Rio also uses Let's Encrypt to create
+### Automatic DNS and HTTPS
+By default Rio will create a DNS record pointing to your cluster's gateway. Rio also uses Let's Encrypt to create
 a certificate for the cluster domain so that all services support HTTPS by default.
 For example, when you deploy your workload, you can access your workload in HTTPS. The domain always follows the format
 of ${app}-${namespace}.\${cluster-domain}. You can see your cluster domain by running `rio info`.
 
-Some name servers provide protection against DNS rebinding attacks. Dnsmasq is a popular example running on many
- routers. This may break endpoint name resolution (`on-rio.io`) for you. Luckily dnsmasq also provides whitelisting.
+Some DNS servers provide protection against DNS rebinding attacks, and may disallow endpoint name resolution for `on-rio.io`. If that happens you need to configure whitelisting for `on-rio.io` on your DNS server.
 
-##### Adding external services
-ExternalService is a service(databases, legacy apps) that is outside of your cluster, and can be added into service discovery.
-It can be IPs, FQDN or service in another namespace. Once added, external service can be discovered by short name within the same namespace.
+### Adding external services
+ExternalService is a service like databases and legacy apps outside of your cluster. 
+ExternalService can be IP addresses, FQDN or a Rio service in another namespace. Once added, external service can be discovered by short name within the same namespace.
 
 ```bash
 $ rio external create ${namespace/name} mydb.com
@@ -171,88 +194,88 @@ $ rio external create ${namespace/name} ${another_svc/another_namespace}
 
 ```
 
-##### Adding Router
+### Adding Router
 Router is a set of L7 load-balancing rules that can route between your services. It can add Header-based, path-based routing, cookies
 and other rules.
 
-To create router in a different namespace:
+Create router in a different namespace:
 ```bash
 $ rio route add $namespace.$name to $target_namespace/target_service 
 ```
 
-To insert a router(rule)
+Insert a router rule
 ```bash
 $ rio route insert $namespace.$name to $target_namespace/target_service  
 ```
 
-To create route based path match
+Create a route based path match
 ```bash
 $ rio route add $namespace.$name/path to $target_namespace/target_service 
 ```
 
-To create router to a different port:
+Create a route to a different port:
 ```bash
 $ rio route add $namespace.$name to $target_namespace/target_service ,port=8080
 ```
 
-To create router based on header(supports exact match: `foo`, prefix match: `foo*`, regular expression match: `regexp(foo.*)`)
+Create router based on header (supports exact match: `foo`, prefix match: `foo*`, and regular expression match: `regexp(foo.*)`)
 ```bash
 $ rio route add --header USER=$format $namespace.$name to $target_namespace/target_service 
 ```
 
-To create router based on cookies(supports exact match: `foo`, prefix match: `foo*`, regular expression match: `regexp(foo.*)`)
+Create router based on cookies (supports exact match: `foo`, prefix match: `foo*`, and regular expression match: `regexp(foo.*)`)
 ```bash
 $ rio route add --cookie USER=$format $namespace.$name to $target_namespace/target_service 
 ```
 
-To create route based on HTTP method(supports exact match: `foo`, prefix match: `foo*`, regular expression match: `regexp(foo.*)`)
+Create route based on HTTP method (supports exact match: `foo`, prefix match: `foo*`, and regular expression match: `regexp(foo.*)`)
 ```bash
 $ rio route add --method GET $namespace.$name to $target_namespace/target_service
 ```
 
-To add, set or remove headers:
+Add, set or remove headers:
 ```bash
 $ rio route add --add-header FOO=BAR $namespace.$name to $target_namespace/target_service   
 $ rio route add --set-header FOO=BAR $namespace.$name to $target_namespace/target_service  
 $ rio route add --remove-header FOO=BAR $namespace.$name to $target_namespace/target_service  
 ```
 
-To mirror traffic:
+Mirror traffic:
 ```bash
 $ rio route add $namespace.$name mirror $target_namespace/target_service 
 ```
 
-To rewrite host header and path
+Rewrite host header and path
 ```bash
 $ rio route add $namespace.$name rewrite $target_namespace/target_service 
 ```
 
-To redirect to another service
+Redirect to another service
 ```bash
 $ rio route add $namespace.$name redirect $target_namespace/target_service/path  
 ```
 
-To add timeout
+Add timeout
 ```bash
 $ rio route add --timeout $namespace.$name to $target_namespace/target_service  
 ```
 
-To add fault injection
+Add fault injection
 ```bash
 $ rio route add --fault-httpcode 502 --fault-delay 1s --fault-percentage 80 $namespace.$name to $target_namespace/target_service 
 ```
 
-To add retry logic
+Add retry logic
 ```bash
 $ rio route add --retry-attempts 5 --retry-timeout 1s $namespace.$name to $target_namespace/target_service 
 ```
 
-To create router to different revision and different weight
+Create router to different revision and different weight
 ```bash
 $ rio route add $namespace.$name to $service:v0,weight=50 $service:v1,weight=50 
 ```
 
-##### Adding Public domain
+### Adding Public domain
 Rio allows you to add a vanity domain to your workloads. For example, to add a domain `www.myproductionsite.com` to your workload,
 run
 ```bash
@@ -267,15 +290,14 @@ $ rio domain register --secret $name www.myproductionsite.com default/route1
 # Access your domain 
 ```
 
-Note: By default Rio will automatically configure Letsencrypt HTTP-01 challenge to provision certs for your publicdomain. This needs you to install rio on standard ports.
+Note: By default Rio will automatically configure Letsencrypt HTTP-01 challenge to provision certs for your public domain. This requires you to install rio on standard ports.
 If you are install rio with svclb or hostport mode, try `rio install --http-port 80 --https-port 443`.
 
-##### Using Riofile
+### Using Riofile
 
-###### Riofile example
+Rio works with standard Kubernetes YAML files. Rio additionally supports a more user-friendly `docker-compose`-style config file called `Riofile`. `Riofile` allows you define rio services, apps, routes, external services, configmap, and secrets.
 
-Rio allows you to define a file called `Riofile`. `Riofile` allows you define rio services, configmap is a friendly way with `docker-compose` syntax.
-For example, to define a nginx application with conf
+For example, this is an example of an nginx application:
 
 ```yaml
 configs:
@@ -300,7 +322,7 @@ services:
 
 Once you have defined `Riofile`, simply run `rio up`. Any change you made for `Riofile`, re-run `rio up` to pick the change.
 
-###### Riofile reference
+#### Riofile reference
 ```yaml
 # Configmap
 configs:          
@@ -522,17 +544,17 @@ externalservices:
     service: $namespace/$name # pointing to services in another namespace
 ``` 
 
-###### Watching Riofile
-You can setup github repository to watch Riofile changes and re-apply Riofile changes. Here is the example:
+#### Watching Riofile
+You can setup Rio to watch for Riofile changes in a Github repository and deploy Riofile changes automatically. For example:
 ```bash
 $ rio up https://github.com/username/repo
 ```
 If you want to setup webhook to watch, go to [here](#setup-github-webhook-experimental)
 
 
-### Monitoring
+## Monitoring
 By default, Rio will deploy [Grafana](https://grafana.com/) and [Kiali](https://www.kiali.io/) to give users the ability to watch all metrics of the service mesh.
-You can find endpoints of both services by running `rio -s ps`.
+You can find endpoints of both services by running `rio -s ps`, and then access these services through their endpoint URLs.
 
 ```bash
 Name                          CREATED       ENDPOINT                                           REVISIONS   SCALE     WEIGHT    DETAIL
@@ -552,8 +574,8 @@ rio-system/build-controller   9 hours ago                                       
 rio-system/prometheus         9 hours ago                                                      v0          1         100%  
 ```
 
-### Autoscaling
-By default each workload is enabled with autoscaling(min scale 1, max scale 10), which means the workload can be scaled from 1 instance to 10 instances
+## Autoscaling
+By default each workload is enabled with autoscaling (min scale 1, max scale 10), which means the workload can be scaled from 1 instance to 10 instances
 depending on how much traffic it receives. To change the scale range, run `rio run --scale=$min-$max ${args}`. To disable autoscaling,
  run `rio run --scale=${num} ${args}`
  
@@ -593,11 +615,11 @@ Name                        IMAGE                           CREATED         SCAL
 default/autoscale-zero:v0   strongmonkey1992/autoscale:v0   9 seconds ago   1         https://autoscale-zero-v0-default.5yt5mw.on-rio.io:9443   100       
 ```
 
-### Continuous Delivery(Source code to Deployment)
+## Continuous Delivery (Source code to Deployment)
 
-##### Example 
-Rio supports configuration of a Git-based source code repository to deploy the actual workload. It can be as easy
-as giving Rio a valid Git repository repo URL.
+Rio supports continous delivery from git-based source code repository to deploy the actual workload. Rio will watch for changes in the git repository, automatically build Docker images, and deploy new versions of the application.
+
+To utilize the continous delivery feature, give Rio a valid git repository URL.
 
 ```bash
 # Run a workload from a git repo. We assume the repo has a Dockerfile at root directory to build the image
@@ -627,7 +649,7 @@ Hi there, I am StrongMonkey:v1
 ```
 
 When you point your workload to a git repo, Rio will automatically watch any commit or tag pushed to
-a specific branch (default is master). By default, Rio will pull and check the branch at a certain interval, but
+a specific branch (default is master). By default, Rio will pull and check the branch at a 15 second interval, but
 can be configured to use a webhook instead.
 
 ```bash
@@ -658,8 +680,8 @@ $ curl https://build-default.8axlxl.on-rio.io
 Hi there, I am StrongMonkey:v3
 ```
 
-#### Setup credential for private repository
-1. Set up git basic auth.(Currently ssh key is not supported and will be added soon). Here is an exmaple of adding a github repo.
+### Setup credential for private repository
+1. Set up git basic auth. (Currently ssh key is not supported and will be added soon.) Here is an exmaple of adding Github repo.
 ```bash
 $ rio secret add --git-basic-auth
 Select namespace[default]: $(put the same namespace with your workload)
@@ -669,7 +691,7 @@ password: $password
 ```
 2. Run your workload and point it to your private git repo. It will automatically use the secret you just configured.
 
-#### Setup Github webhook (experimental)
+### Setup Github webhook (experimental)
 By default, rio will automatically pull git repo and check if repo code has changed. You can also configure a webhook to automatically push any events to Rio to trigger the build.
 
 1. Set up Github webhook token.
@@ -683,7 +705,7 @@ accessToken: $(github_accesstoken) # the token has to be able create webhook in 
 
 3. Go to your Github repo, it should have webhook configured to point to one of our webhook service.
 
-#### Set Custom build arguments and docker registry
+### Set Custom build arguments and docker registry
 You can also push to your own registry for images that rio has built.
 
 1. Setup docker registry auth. Here is an example of how to setup docker registry.
@@ -702,7 +724,7 @@ $ rio run --build-registry docker.io --build-image-name $(username)/yourimagenam
 ```
 `docker.io/$(username)/yourimagename` will be pushed into dockerhub registry. 
 
-#### Enable Pull request (experimental)
+### Enable Pull request (experimental)
 Rio also allows you to configure pull request builds. This needs you to configure github webhook token correctly.
 
 1. Set up github webhook token in the previous session
@@ -716,7 +738,7 @@ $ rio run --build-enable-pr $(repo)
 After this, if there is any pull request, Rio will create a deployment based on this pull request, and you will get a unique link
 to see the change this pull request introduced in the actual deployment.
 
-#### View build logs
+### View build logs
 To view logs from your builds
 ```bash
 $ rio builds
@@ -729,9 +751,9 @@ $ rio logs -f default/fervent-swartz6-ee709-786b366d5d44de6b547939f51d467437e45c
 $ rio build restart default/fervent-swartz6-ee709-786b366d5d44de6b547939f51d467437e45c5ee1
 ```
 
-### Using Riofile to build and develop application
+## Local Developer Setup
 
-Rio allows developer to build and develop applications from local source code. Rio will by default use buildkit to build application.
+Rio supports a local developer setup where source code is stored locally. Rio by default uses buildkit to build application.
 
 Requirements:
 1. Local repo must have `Dockerfile` and `Riofile`.
@@ -745,7 +767,7 @@ Use cases:
 5. `vim main.go && change "Hi there, I am demoing Riofile" to "Hi there, I am demoing something"`
 6. Re-run `rio up`. It will rebuild. After it is done, revisit service endpoint to see if content is changed.
 
-If you want more complicated build arguments, rio supports the following format
+If you want more complex build arguments, rio supports the following format
 ```yaml
 services:
   demo:
@@ -761,31 +783,6 @@ services:
     push: true
     buildImageName: docker.io/foo/bar
 ```
-
-## Advanced Options
-
-There are other install options:
-
-* `http-port`: HTTP port gateway service will listen. If install mode is svclb or hostport, defaults to 9080. If install mode is ingress, it will 80.
-* `https-port`: HTTPS port gateway service will listen. If install mode is svclb or hostport, defaults to 9443. If install mode is ingress, it will 443.
-* `ip-address`: Manually specify worker IP addresses to generate DNS domain. By default Rio will detect based on install mode.
-* `service-cidr`: Manually specify service-cidr for service mesh to intercept traffic. By default Rio will try to detect.
-* `disable-features`: Specify feature to disable during install. Here are the available feature list.
-
-| Feature | Description |
-|----------|----------------|
-| autoscaling | Auto-scaling services based on QPS and requests load
-| build | Rio Build, from source code to deployment
-| grafana | Grafana Dashboard
-| istio | Service routing using Istio
-| kiali | Kiali Dashboard
-| letsencrypt | Let's Encrypt
-| mixer | Istio Mixer telemetry
-| prometheus | Enable prometheus
-| rdns | Assign cluster a hostname from public Rancher DNS service
-
-* `httpproxy`: Specify HTTP_PROXY environment variable for control plane.
-* `lite`: install with lite mode.
 
 
 ## FAQ
