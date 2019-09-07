@@ -3,8 +3,8 @@
 ## Usage
 
 - [Install Options](#install-options)
+- [Concept](#concept)
 - [Running workloads](#running-workload)
-  - [Quick start](#quick-start)
   - [Canary Deployment](#canary-deployment)
   - [Automatic DNS and HTTPS](#automatic-dns-and-https)
   - [Adding external services](#adding-external-services)
@@ -21,7 +21,7 @@
   - [Setting Pull Request Feature](#enable-pull-request-experimental)
   - [View Build logs](#view-build-logs)
 - [Using Riofile to build and develop](#using-riofile-to-build-and-develop-application)
-- [Concept](#concept)
+- [Advanced options](#advanced-options)
 - [FAQ](#faq)
 
 ### Install Options
@@ -31,19 +31,48 @@ Rio provides three install options for users.
 * `svclb`: Rio will use service loadbalancer to expose gateway services. 
 * `hostport`: Rio will expose hostport for gateway services.
 
-There are other install options:
+## Concept
 
-* `http-port`: Http port gateway service will listen. If install mode is ingress, it will 80.
-* `https-port`: Https port gateway service will listen. If install mode is ingress, it will 443.
-* `ip-address`: Manually specify worker IP addresses to generate DNS domain. By default Rio will detect based on install mode.
-* `service-cidr`: Manually specify service-cidr for service mesh to intercept traffic. By default Rio will try to detect.
-* `disable-features`: Specify feature to disable during install.
-* `httpproxy`: Specify HTTP_PROXY environment variable for control plane.
-* `lite`: install with lite mode.
+### Service
+
+The main unit that is being dealt with in Rio are services. Services are just a scalable set of containers that provide a
+similar function. When you run containers in Rio you are really creating a Service. `rio run` and `rio create` will
+create a service. You can later scale that service with `rio scale`. Services are assigned a DNS name so that group
+of containers can be accessed from other services.
+
+### Apps
+
+An App contains multiple service revisions. Each service in Rio is assigned an app and version. Services that have the same app but
+different versions are reference to as revisions. The group of all revisions for an app is what is called an App or application in Rio.
+An application named `foo` will be given a DNS name like `foo.clusterdomain.on-rio.io` and each version is assigned it's own DNS name. If the app was
+`foo` and the version is `v2` the assigned DNS name for that revision would be similar to `foo-v2.clusterdomain.on-rio.io`. `rio ps` and `rio revision` will
+list the assigned DNS names.
+
+### Router
+
+Router is a virtual service that load balances and routes traffic to other services. Routing rules can route based
+on hostname, path, HTTP headers, protocol, and source.
+
+### External Service
+
+External Service provides a way to register external IPs or hostnames in the service mesh so they can be accessed by Rio services.
+
+### Public Domain
+
+Public Domain can be configured to assign a service or router a vanity domain like www.myproductionsite.com.
+
+### Configs
+
+ConfigMaps(Kubernetes resource) can be referenced by Rio services. It is a piece of configuration which can be mounted into pods so that it can be separated from image artifacts.
+It can be created separated in the existing cluster and referenced by Rio service.
+
+### Secrets
+
+Secrets(Kubernetes resource) can be referenced by rio services. It contains sensitive data which can be mounted into pods to consume. Secrets can also be created separated in the existing
+cluster and referenced by rio services. 
 
 ### Running workload
 
-##### Quick start
 To deploy workload to rio:
 ```bash
 # ibuildthecloud/demo:v1 is a docker image that listens on 80 and print "hello world"
@@ -144,27 +173,83 @@ $ rio external create ${namespace/name} ${another_svc/another_namespace}
 
 ##### Adding Router
 Router is a set of L7 load-balancing rules that can route between your services. It can add Header-based, path-based routing, cookies
-and other rules. For example, to add path-based routing,
+and other rules.
 
+To create router in a different namespace:
 ```bash
-$ rio run -p 80/http --name svc ibuildthecloud/demo:v1
-$ rio run -p 80/http --name svc3 ibuildthecloud/demo:v3
+$ rio route add $namespace.$name to $target_namespace/target_service 
+```
 
-# Create a route to point to svc:v0 and svc:v3
-$ rio route add route1/to-svc-v0 to default/svc
-$ rio route add route1/to-svc-v3 to default/svc3
+To insert a router(rule)
+```bash
+$ rio route insert $namespace.$name to $target_namespace/target_service  
+```
 
-# Access the route
-$ rio route
-Name             URL                                                      OPTS      ACTION    TARGET
-default/route1   https://route1-default.5yt5mw.on-rio.io:9443/to-svc-v0             to        svc:v0,port=80
-default/route1   https://route1-default.5yt5mw.on-rio.io:9443/to-svc-v3             to        svc:v3,port=80
+To create route based path match
+```bash
+$ rio route add $namespace.$name/path to $target_namespace/target_service 
+```
 
-$ curl -s https://route1-default.iazlia.on-rio.io:9443/to-svc-v0
-Hello World
+To create router to a different port:
+```bash
+$ rio route add $namespace.$name to $target_namespace/target_service ,port=8080
+```
 
-$ curl -s https://route1-default.iazlia.on-rio.io:9443/to-svc-v3
-Hello World v3
+To create router based on header(supports exact match: `foo`, prefix match: `foo*`, regular expression match: `regexp(foo.*)`)
+```bash
+$ rio route add --header USER=$format $namespace.$name to $target_namespace/target_service 
+```
+
+To create router based on cookies(supports exact match: `foo`, prefix match: `foo*`, regular expression match: `regexp(foo.*)`)
+```bash
+$ rio route add --cookie USER=$format $namespace.$name to $target_namespace/target_service 
+```
+
+To create route based on HTTP method(supports exact match: `foo`, prefix match: `foo*`, regular expression match: `regexp(foo.*)`)
+```bash
+$ rio route add --method GET $namespace.$name to $target_namespace/target_service
+```
+
+To add, set or remove headers:
+```bash
+$ rio route add --add-header FOO=BAR $namespace.$name to $target_namespace/target_service   
+$ rio route add --set-header FOO=BAR $namespace.$name to $target_namespace/target_service  
+$ rio route add --remove-header FOO=BAR $namespace.$name to $target_namespace/target_service  
+```
+
+To mirror traffic:
+```bash
+$ rio route add $namespace.$name mirror $target_namespace/target_service 
+```
+
+To rewrite host header and path
+```bash
+$ rio route add $namespace.$name rewrite $target_namespace/target_service 
+```
+
+To redirect to another service
+```bash
+$ rio route add $namespace.$name redirect $target_namespace/target_service/path  
+```
+
+To add timeout
+```bash
+$ rio route add --timeout $namespace.$name to $target_namespace/target_service  
+```
+
+To add fault injection
+```bash
+$ rio route add --fault-httpcode 502 --fault-delay 1s --fault-percentage 80 $namespace.$name to $target_namespace/target_service 
+```
+
+To add retry logic
+```bash
+$ rio route add --retry-attempts 5 --retry-timeout 1s $namespace.$name to $target_namespace/target_service 
+```
+
+To create router to different revision and different weight
+```bash
+$ rio route add $namespace.$name to $service:v0,weight=50 $service:v1,weight=50 
 ```
 
 ##### Adding Public domain
@@ -189,7 +274,7 @@ If you are install rio with svclb or hostport mode, try `rio install --http-port
 
 ###### Riofile example
 
-Rio allows you to define a file called `Riofile`. `Riofile` allows you define rio services and configmap is a friendly way with `docker-compose` syntax.
+Rio allows you to define a file called `Riofile`. `Riofile` allows you define rio services, configmap is a friendly way with `docker-compose` syntax.
 For example, to define a nginx application with conf
 
 ```yaml
@@ -213,89 +298,229 @@ services:
     - conf/index.html:/usr/share/nginx/html/index.html
 ```
 
-```yaml
-services:
-  demo:
-    build:
-      repo: https://github.com/rancher/rio-demo
-      branch: master
-    ports:
-    - 80/http
-    scale: 1-20
-```
-
 Once you have defined `Riofile`, simply run `rio up`. Any change you made for `Riofile`, re-run `rio up` to pick the change.
 
-More complicated examples are available at [here](../stacks).
-
 ###### Riofile reference
-- `arg`: Arguments to the entrypoint
-- `command`: Entrypoint array
-- `scale`: Scale of the service. Can be specifed as `min-max`(1-10) to enable autoscaling.
-- `ports`: Container ports. Format: `$(servicePort:)containerPort/protocol`. 
-- `build`: Build arguments.
 ```yaml
-build:
-    buildArgs: # build arguments
-    - foo=bar
-    dockerFile: Dockerfile # the name of Dockerfile to look for
-    dockerFilePath: ./ # the path of Dockerfile to look for
-    buildContext: ./  # build context
-    noCache: true # build without cache
-    push: true
-    buildImageName: foo/bar # specify custom image name
-    pushRegistry: docker.io # specify push registry
-```
-- `configs`: Specify configmap to mount. Format: `$name/$key:/path/to/file`.
-- `secrets`: Specify secret to mount. Format: `$name/$key:/path/to/file`.
-- `pullPolicy`: Specify image pull policy. Options: `always/never/ifNotProsent`.
-- `disableServiceMesh`: Disable service mesh sidecar.
-- `global_permissions`: Specify the global permission of workload
-
-Example: 
-```yaml
-global_permissions:
-- 'create,get,list certmanager.k8s.io/*'
-```
-this will give workload abilities to **create, get, list** **all** resources in api group **certmanager.k8s.io**.
-
-If you want to hook up with an existing role:
-
-```yaml
-global_permissions:
-- 'role=cluster-admin'
-```
-
-- `permisions`: Specify current namespace permission of workload
-
-Example: 
-```yaml
-permissions:
-- 'create,get,list certmanager.k8s.io/*'
-```
-
-this will give workload abilities to **create, get, list** **all** resources in api group **certmanager.k8s.io** in **current** namespace.
-
-- `labels`: Specify labels
-- `annotations`: Specify annotations
-- `containers`: Specify multiple containers.
-- `env`: Specify environment variables. You can use the following syntax.
-```yaml
-"self/name":           "metadata.name",
-"self/namespace":      "metadata.namespace",
-"self/labels":         "metadata.labels",
-"self/annotations":    "metadata.annotations",
-"self/node":           "spec.nodeName",
-"self/serviceAccount": "spec.serviceAccountName",
-"self/hostIp":         "status.hostIP",
-"self/nodeIp":         "status.hostIP",
-"self/ip":             "status.podIP",
-```
-For example, to set an environment name to its own name
-```yaml
-env:
-- POD_NAME=$(self/name)
-```
+# Configmap
+configs:          
+  config-foo:     # specify name in the section 
+    key1: |-      # specify key and data in the section 
+      {{ config1 }}
+    key2: |-
+      {{ config2 }}
+      
+# Service
+services:
+  service-foo:
+    disableServiceMesh: true # disable service mesh side injection for service
+    
+    # scale setting
+    scale: 2 # specify scale of the service. If you pass range `1-10`, it will enable autoscaling which can be scale from 1 to 10.
+    updateBatchSize: 1 # specify the update batch size.
+    
+    # revision setting
+    app: my-app # specify app name. Defaults to service name. This is used to aggregate services that belongs to the same app.
+    version: v0 # specify revision name
+    weight: 80 # weight assigned to this revision. Value: 0-100
+    
+    # autoscaling setting
+    concurrency: 10 # specify concurrent request each pod can handle(soft limit, used to scale service)
+    
+    # rollout config
+    rollout: true# whether rollout traffic gradually
+    rolloutIncrement: 5 # traffic percentage increment(%) for each interval. Will not work if rollout is false
+    rolloutInterval: 2 # traffic increment interval(seconds). Will not work if rollout is false
+    
+    # Permission for service
+    # 
+    #   global_permissions:
+    #   - 'create,get,list certmanager.k8s.io/*'
+    #  
+    #   this will give workload abilities to **create, get, list** **all** resources in api group **certmanager.k8s.io**.
+    #
+    #   If you want to hook up with an existing role:
+    #
+    #   
+    #   global_permissions:
+    #   - 'role=cluster-admin'
+    #   
+    #
+    #   - `permisions`: Specify current namespace permission of workload
+    #
+    #   Example: 
+    #   
+    #   permissions:
+    #   - 'create,get,list certmanager.k8s.io/*'
+    #  
+    #
+    #   This will give workload abilities to **create, get, list** **all** resources in api group **certmanager.k8s.io** in **current** namespace. 
+    #   
+    #   Example: 
+    #   
+    #   permissions:
+    #   - 'create,get,list /node/proxy'
+    #   
+    #    This will give subresource for node/proxy 
+    global_permissions:
+    - 'create,get,list certmanager.k8s.io/*'
+    permissions:
+    - 'create,get,list certmanager.k8s.io/*'
+    
+    # container configuration
+    image: # container image
+    imagePullPolicy: # image pull policy. Options: (always/never/ifNotProsent)
+    build:
+      repo: https://github.com/rancher/rio # git repository to build
+      branch: master # git repository branch
+      revision: v0.1.0 # revision digest to build. If set, image will be built based on this revision. Otherwise it will take head revision in repo. Also if revision is not set, it will be served as the base revision to watch any change in repo and create new revision based changes from repo.
+      buildArgs: # build arguments to pass to buildkit https://docs.docker.com/engine/reference/builder/#understand-how-arg-and-from-interact
+      - foo=bar
+      dockerFile: Dockerfile # the name of Dockerfile to look for
+      dockerFilePath: ./ # the path of Dockerfile to look for
+      buildContext: ./  # docker build context
+      noCache: true # build without cache
+      buildImageName: myname/image:tag # specify custom image name(excluding registry name). Default name: $namespace/name:$revision_digest
+      pushRegistry: docker.io # specify push registry. Example: docker.io, gcr.io
+      stageOnly: true # if set, newly created revision will get any traffic
+      githubSecretName: secretGithub # specify github webhook secretName to setup github webhook
+      gitSecretName: secretGit # specify git secret name for private git repository
+      pushRegistrySecretName: secretDocker # specify secret name for pushing to docker registry
+      enablePr: true # enable pull request feature
+    command: # container entrypoint, not executed within a shell. The docker image's ENTRYPOINT is used if this is not provided.
+    - echo
+    args: # arguments to the entrypoint. The docker image's CMD is used if this is not provided.
+    - "hello world"
+    workingDir: /home # container working directory
+    ports: # container ports, format: `$(servicePort:)containerPort/protocol`
+    - 8080:80/http,web # service port 8080 will be mapped to container port 80 with protocol http, named `web`
+    - 8080/http,admin,internal=true # service port 8080 will be mapped to container port 8080 with protocol http, named `admin`, internal port(will not be exposed through gateway) 
+    env: # specify environment variable
+    - POD_NAME=$(self/name) # mapped to "metadata.name" 
+    # 
+    # "self/name":           "metadata.name",
+    # "self/namespace":      "metadata.namespace",
+    # "self/labels":         "metadata.labels",
+    # "self/annotations":    "metadata.annotations",
+    # "self/node":           "spec.nodeName",
+    # "self/serviceAccount": "spec.serviceAccountName",
+    # "self/hostIp":         "status.hostIP",
+    # "self/nodeIp":         "status.hostIP",
+    # "self/ip":             "status.podIP",
+    # 
+    cpus: 100m # cpu request, format 0.5 or 500m. 500m = 0.5 core. https://kubernetes.io/docs/concepts/configuration/manage-compute-resources-container/
+    memory: 100 mi # memory request. 100mi, available options https://kubernetes.io/docs/concepts/configuration/manage-compute-resources-container/
+    secrets: # specify secret to mount. Format: `$name/$key:/path/to/file`. Secret has to be pre-created in the same namespace
+    - foo/bar:/my/password
+    configs: # specify configmap to mount. Format: `$name/$key:/path/to/file`. 
+    - foo/bar:/my/config
+    livenessProbe: # livenessProbe setting. https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/
+      httpGet:
+        path: /ping
+        port: 9997
+      initialDelaySeconds: 10
+    readinessProbe: # readinessProbe https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/
+      failureThreshold: 7
+      httpGet:
+        path: /ready
+        port: 9997
+    stdin: true # whether this container should allocate a buffer for stdin in the container runtime
+    stdinOnce: true # whether the container runtime should close the stdin channel after it has been opened by a single attach. When stdin is true the stdin stream will remain open across multiple attach sessions.
+    tty: true # whether this container should allocate a TTY for itself
+    user: 1000 # the UID to run the entrypoint of the container process.
+    group: 1000 # the GID to run the entrypoint of the container process
+    readOnly: true # whether this container has a read-only root filesystem
+    
+    nodeAffinity: # Describes node affinity scheduling rules for the pod.
+    podAffinity:  # Describes pod affinity scheduling rules (e.g. co-locate this pod in the same node, zone, etc. as some other pod(s)).
+    podAntiAffinity: # Describes pod anti-affinity scheduling rules (e.g. avoid putting this pod in the same node, zone, etc. as some other pod(s)).
+    
+    addHost: # hostname alias
+    net: host # host networking
+    imagePullSecrets: # image pull secret https://kubernetes.io/docs/concepts/containers/images#specifying-imagepullsecrets-on-a-pod
+    - secret1
+    - secret2 
+    
+    containers: # specify sidecars
+    - init: true # init container
+      image: ubuntu
+      args:
+      - "echo"
+      - "hello world"
+      # other options are available in container section above
+ 
+# Router
+routers:
+  foo:
+    routes:
+    - matches: # match rules, the first rule matching an incoming request is used
+      - path: # match path, can specify regxp, prefix or exact match 
+          regxp: /bar.*
+          # prefix: /bar
+          # exact: /bar
+        scheme:
+          regxp: /bar.*
+          # prefix: /bar
+          # exact: /bar
+        method:
+          regxp: /bar.*
+          #prefix: /bar
+          #exact: /bar
+        headers:
+          FOO:
+            regxp: /bar.*
+            #prefix: /bar
+            #exact: /bar
+        cookie:
+          USER:
+            regxp: /bar.*
+            #prefix: /bar
+            #exact: /bar
+      to:  # specify destination
+      - service: service-foo
+        revision: v0
+        namespace: default
+        weight: 50
+      - service: service-foo
+        revision: v1
+        namespace: default
+        weight: 50
+      redirect: # specify redirect rule
+        host: www.foo.bar
+        path: /redirect
+      rewrite:
+        host: www.foo.bar
+        path: /rewrite
+      headers: # header operations
+        add:
+          foo: bar
+        set:
+          foo: bar
+        remove:
+        - foo
+      fault:
+        percentage: 80 # inject fault percentage(%)
+        delayMillis: 100 # adding delay before injecting fault (millseconds)
+        abort:
+          httpStatus: 502 # injecting http code
+      mirror:   # sending mirror traffic
+        service: mirror-foo
+        revision: v0
+        namespace: default
+      timeoutMillis: 100 # setting request timeout (milli-seconds)
+      retry:
+        attempts: 10 # retry attempts
+        timeoutMillis: 100 # retry timeout (milli-seconds)
+        
+# externalservices
+externalservices:
+  foo:
+    ipAddresses: # pointing to external IP addresses
+    - 1.1.1.1
+    - 2.2.2.2
+    fqdn: www.foo.bar # pointing to fqdn
+    service: $namespace/$name # pointing to services in another namespace
+``` 
 
 ###### Watching Riofile
 You can setup github repository to watch Riofile changes and re-apply Riofile changes. Here is the example:
@@ -537,46 +762,31 @@ services:
     buildImageName: docker.io/foo/bar
 ```
 
+## Advanced Options
 
-## Concept
+There are other install options:
 
-### Service
+* `http-port`: HTTP port gateway service will listen. If install mode is svclb or hostport, defaults to 9080. If install mode is ingress, it will 80.
+* `https-port`: HTTPS port gateway service will listen. If install mode is svclb or hostport, defaults to 9443. If install mode is ingress, it will 443.
+* `ip-address`: Manually specify worker IP addresses to generate DNS domain. By default Rio will detect based on install mode.
+* `service-cidr`: Manually specify service-cidr for service mesh to intercept traffic. By default Rio will try to detect.
+* `disable-features`: Specify feature to disable during install. Here are the available feature list.
 
-The main unit that is being dealt with in Rio are services. Services are just a scalable set of containers that provide a
-similar function. When you run containers in Rio you are really creating a Service. `rio run` and `rio create` will
-create a service. You can later scale that service with `rio scale`. Services are assigned a DNS name so that group
-of containers can be accessed from other services.
+| Feature | Description |
+|----------|----------------|
+| autoscaling | Auto-scaling services based on QPS and requests load
+| build | Rio Build, from source code to deployment
+| grafana | Grafana Dashboard
+| istio | Service routing using Istio
+| kiali | Kiali Dashboard
+| letsencrypt | Let's Encrypt
+| mixer | Istio Mixer telemetry
+| prometheus | Enable prometheus
+| rdns | Assign cluster a hostname from public Rancher DNS service
 
-### Apps
+* `httpproxy`: Specify HTTP_PROXY environment variable for control plane.
+* `lite`: install with lite mode.
 
-An App contains multiple service revisions. Each service in Rio is assigned an app and version. Services that have the same app but
-different versions are reference to as revisions. The group of all revisions for an app is what is called an App or application in Rio.
-An application named `foo` will be given a DNS name like `foo.clusterdomain.on-rio.io` and each version is assigned it's own DNS name. If the app was
-`foo` and the version is `v2` the assigned DNS name for that revision would be similar to `foo-v2.clusterdomain.on-rio.io`. `rio ps` and `rio revision` will
-list the assigned DNS names.
-
-### Router
-
-Router is a virtual service that load balances and routes traffic to other services. Routing rules can route based
-on hostname, path, HTTP headers, protocol, and source.
-
-### External Service
-
-External Service provides a way to register external IPs or hostnames in the service mesh so they can be accessed by Rio services.
-
-### Public Domain
-
-Public Domain can be configured to assign a service or router a vanity domain like www.myproductionsite.com.
-
-### Configs
-
-ConfigMaps(Kubernetes resource) can be referenced by Rio services. It is a piece of configuration which can be mounted into pods so that it can be separated from image artifacts.
-It can be created separated in the existing cluster and referenced by Rio service.
-
-### Secrets
-
-Secrets(Kubernetes resource) can be referenced by rio services. It contains sensitive data which can be mounted into pods to consume. Secrets can also be created separated in the existing
-cluster and referenced by rio services. 
 
 ## FAQ
 
@@ -600,5 +810,12 @@ Change status.domain to your own wildcard doamin. You are responsible to manage 
 * How can I reference persist volume?
 ```
 Rio only supports stateless workloads at this point.
+```
+
+* How to manually specify IP addresses?
+```
+Rio will automatically detect work node ip addresses based on install mode. If your host has multiple IP addresses, you can manually specify which IP address Rio should use for creating external DNS records with the `--ip-address` flag. 
+For instance to advertise the external IP of an AWS instance: `rio install --ip-address $(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)`
+By doing this, you lose the ability to dynamic updating IP addresses to DNS.
 ```
 
